@@ -1,0 +1,49 @@
+[project]
+name = "sparrow"
+version = "0.1.0"
+description = "SparroW - OpenAI-compatible router for keyless free LLM providers"
+requires-python = ">=3.12"
+authors = [
+    { name = "hallaxius", email = "support@hallaxi.us" },
+]
+urls = { Homepage = "https://hallaxi.us/sparrow" }
+dependencies = [
+    "httpx[socks]>=0.28",
+    "starlette>=1.6",
+    "uvicorn[standard]>=0.52",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.15",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.11",
+    "mypy>=1.15",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "respx>=0.22",
+]
+
+[project.scripts]
+sparrow = "sparrow.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "TCH", "RUF"]
+ignore = ["E501", "TC001", "TC002", "TC003"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

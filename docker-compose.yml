@@ -1,0 +1,52 @@
+services:
+  sparrow:
+    build: .
+    container_name: sparrow
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SPARROW_HOST=0.0.0.0
+      - SPARROW_PORT=8080
+      - SPARROW_ROUTING=fair
+      - SPARROW_WARP_ENABLED=true
+      - SPARROW_WARP_URL=socks5://warp:1080
+      - WARP_HEALTH_INTERVAL=60
+      - WARP_CONNECT_TIMEOUT=10
+      - WARP_READ_TIMEOUT=120
+    depends_on:
+      warp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - sparrow-net
+
+  warp:
+    image: dublok/cloudflare-warp:latest
+    container_name: sparrow_warp
+    restart: unless-stopped
+    environment:
+      - WARP_INSTANCES=5
+      - WARP_CONNECT_TIMEOUT=30
+    volumes:
+      - warp-data:/var/lib/cloudflare-warp
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--socks5-hostname", "127.0.0.1:1080", "https://cloudflare.com/cdn-cgi/trace"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - sparrow-net
+
+networks:
+  sparrow-net:
+    driver: bridge
+
+volumes:
+  warp-data:

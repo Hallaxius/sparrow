@@ -8,11 +8,27 @@ from sparrow.proxy import WARPConfig, WARPHealth, WARPProxy
 class TestWARPConfig:
     def test_defaults(self):
         config = WARPConfig()
-        assert config.enabled is False
-        assert config.proxy_url == ""
+        assert config.enabled is True
+        assert config.proxy_url == "socks5://warp:1080"
 
-    def test_from_env_disabled(self):
+    def test_from_env_default_enabled(self):
         with patch.dict("os.environ", {}, clear=False):
+            config = WARPConfig.from_env()
+            assert config.enabled is True
+            assert config.proxy_url == "socks5://warp:1080"
+
+    def test_from_env_explicit_opt_out(self):
+        with patch.dict("os.environ", {"SPARROW_WARP_ENABLED": "false"}, clear=False):
+            config = WARPConfig.from_env()
+            assert config.enabled is False
+
+    def test_from_env_opt_out_zero(self):
+        with patch.dict("os.environ", {"SPARROW_WARP_ENABLED": "0"}, clear=False):
+            config = WARPConfig.from_env()
+            assert config.enabled is False
+
+    def test_from_env_opt_out_no(self):
+        with patch.dict("os.environ", {"SPARROW_WARP_ENABLED": "no"}, clear=False):
             config = WARPConfig.from_env()
             assert config.enabled is False
 
@@ -33,13 +49,19 @@ class TestWARPConfig:
             assert config.enabled is True
             assert config.proxy_url == "socks5://warp:1080"
 
+    def test_from_env_custom_proxy_url(self):
+        with patch.dict("os.environ", {
+            "SPARROW_WARP_URL": "socks5://custom:1080",
+        }, clear=False):
+            config = WARPConfig.from_env()
+            assert config.enabled is True
+            assert config.proxy_url == "socks5://custom:1080"
 
 class TestWARPHealth:
     def test_defaults(self):
         health = WARPHealth()
         assert health.healthy is False
         assert health.warp_status == "unknown"
-
 
 class TestWARPProxy:
     def test_init_disabled(self):
@@ -94,7 +116,6 @@ class TestWARPProxy:
         proxy = WARPProxy(config=WARPConfig(enabled=False))
         await proxy.start()
         await proxy.stop()
-
 
 class TestWARPIntegration:
 

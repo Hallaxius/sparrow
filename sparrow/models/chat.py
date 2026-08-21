@@ -12,7 +12,6 @@ class ChatMessage(BaseModel):
     tool_call_id: str | None = None
     tool_calls: list[Any] | None = None
 
-
 class ChatRequest(BaseModel):
     model: str
     messages: list[ChatMessage]
@@ -27,19 +26,17 @@ class ChatRequest(BaseModel):
     tool_choice: str | dict[str, Any] | None = None
     response_format: dict[str, Any] | None = None
     user: str | None = None
-
+    api_key: str | None = None
 
 class Usage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
 
-
 class ChatChoice(BaseModel):
     index: int = 0
     message: ChatMessage
     finish_reason: str | None = None
-
 
 class ChatResponse(BaseModel):
     id: str
@@ -50,17 +47,14 @@ class ChatResponse(BaseModel):
     usage: Usage = Usage()
     system_fingerprint: str | None = None
 
-
 class DeltaMessage(BaseModel):
     role: str | None = None
     content: str | None = None
-
 
 class ChatChoiceDelta(BaseModel):
     index: int = 0
     delta: DeltaMessage
     finish_reason: str | None = None
-
 
 class ChatChunk(BaseModel):
     id: str

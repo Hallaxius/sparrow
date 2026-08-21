@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -25,7 +26,6 @@ class ProviderStats:
         if self.successes == 0:
             return 0.0
         return self.total_latency_ms / self.successes
-
 
 class StatsTracker:
 
@@ -63,7 +63,7 @@ class StatsTracker:
     def get_all_stats(self) -> dict[str, ProviderStats]:
         return self._providers.copy()
 
-    def get_summary(self) -> dict[str, object]:
+    def get_summary(self) -> dict[str, Any]:
         return {
             "total_requests": self._total_requests,
             "uptime_seconds": int(time.time() - self._start_time),

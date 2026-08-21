@@ -10,7 +10,6 @@ def test_register_route():
     engine.register_route(route)
     assert len(engine._routes) == 1
 
-
 def test_select_fair():
     engine = RoutingEngine()
     engine.register_route(Route("p1", "m1", quality=5))
@@ -25,7 +24,6 @@ def test_select_fair():
     assert r2.provider_id == "p2"
     assert r3.provider_id == "p3"
 
-
 def test_select_quality():
     engine = RoutingEngine()
     engine.register_route(Route("p1", "m1", quality=5))
@@ -35,7 +33,6 @@ def test_select_quality():
     route = engine.select("auto", RoutingMode.QUALITY)
     assert route.provider_id == "p2"
 
-
 def test_select_specific_model():
     engine = RoutingEngine()
     engine.register_route(Route("p1", "m1", quality=5))
@@ -43,7 +40,6 @@ def test_select_specific_model():
 
     route = engine.select("m2", RoutingMode.FAIR)
     assert route.model_id == "m2"
-
 
 def test_all_providers_exhausted():
     engine = RoutingEngine()

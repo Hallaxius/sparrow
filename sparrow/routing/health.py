@@ -41,7 +41,6 @@ class CircuitBreaker:
     def state(self) -> str:
         return self._state
 
-
 class RouteHealthTracker:
 
     def __init__(self) -> None:

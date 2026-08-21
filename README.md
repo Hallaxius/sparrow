@@ -31,7 +31,7 @@
 
 ## Overview
 
-SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible API. Point any OpenAI SDK or client at SparroW and get automatic failover across **7 providers** and **26 models** — no API keys to the upstream providers required.
+SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible API. Point any OpenAI SDK or client at SparroW and get automatic failover across **6 providers** — models are fetched dynamically via `sparrow init` — no API keys to the upstream providers required.
 
 **Key Philosophy:**
 
@@ -64,9 +64,8 @@ SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible
 
 ### Security
 
-- ✅ **API Key Management** — create, list, delete, rate-limit keys via REST
-- ✅ **Rate Limiting** — per-key request limits with configurable windows
-- ✅ **In-Memory Keys** — keys stored in memory, wiped on rebuild (intentional)
+- ✅ **API Key Auth** — `.env`-backed static API keys, validated from request body or auth header
+- ✅ **Rate Limiting** — IP-based request limits with configurable windows
 
 ### Infrastructure
 
@@ -79,14 +78,16 @@ SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible
 
 ## Providers
 
-| Provider | Models | Quality Range |
+| Provider | Quality Range | Notes |
 |---|---|---|
-| **OVHcloud** | Qwen 2.5 VL 72B, Mistral Small 3.2, Mistral Nemo, Qwen 3 32B, Qwen3 Coder 30B, Mistral 7B | 5–8 |
-| **Kilo Gateway** | Nemotron 3 Super 120B, Nemotron 3 Ultra 550B, OpenRouter Free, Hy3 Free, Laguna S 2.1 | 6–9 |
-| **OpenCode Zen** | MiMo V2.5, DeepSeek V4 Flash, Nemotron 3 Ultra, Hy3, Nemotron 3.5 Lightning | 7–8 |
-| **LLM7** | Default, GPT-OSS 20B, MiniMax M2.7 | 6 |
-| **BlockRun** | GPT-OSS 20B, GPT-OSS 120B, Step 3.7 Flash, Nemotron Nano 9B, Nemotron Nano 12B VL, Nemotron 3 Nano Omni 30B | 6–8 |
-| **Algoholia** | Algoholia Free | 5 |
+| **OVHcloud** | 5–8 | Models fetched dynamically |
+| **Kilo Gateway** | 6–9 | Models fetched dynamically |
+| **OpenCode Zen** | 7–8 | Models fetched dynamically |
+| **LLM7** | 6 | Models fetched dynamically |
+| **BlockRun** | 6–8 | Models fetched dynamically |
+| **Algoholia** | 5 | Models fetched dynamically |
+
+> 💡 Run `uv run python -m sparrow init` to fetch all available models from each provider.
 
 ---
 
@@ -135,31 +136,40 @@ uv run python -m sparrow
 
 ## Quick Start
 
-### 1. Start the proxy
+### 1. Initialize providers (required on first run)
+
+```bash
+uv run python -m sparrow init
+```
+
+This fetches the latest models from all configured providers and generates `providers.toml`.
+
+### 2. Start the proxy
 
 ```bash
 docker compose up -d --build
 ```
 
-### 2. Get your API key
+### 3. Configure your API key
 
 ```bash
-docker compose logs sparrow | grep "Default API key"
+cp .env.example .env
+# Edit .env and set SPARROW_API_KEY to your chosen key
 ```
 
-### 3. Make a request
+### 4. Make a request
 
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-YOUR-KEY" \
   -d '{
     "model": "auto",
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "api_key": "YOUR-KEY"
   }'
 ```
 
-### 4. Verify it works
+### 5. Verify it works
 
 ```bash
 curl http://localhost:8080/healthz
@@ -203,11 +213,11 @@ All endpoints follow the OpenAI API format.
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-YOUR-KEY" \
   -d '{
     "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Write a haiku"}],
-    "stream": true
+    "stream": true,
+    "api_key": "YOUR-KEY"
   }'
 ```
 
@@ -236,24 +246,9 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 |--------|----------|-------------|
 | GET | `/v1/providers` | List all providers with health status |
 
-### API Key Management
+### API Key Authentication
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/v1/apikeys` | List all API keys |
-| POST | `/v1/apikeys` | Create a new API key |
-| PATCH | `/v1/apikeys/{key_hash}` | Update an API key |
-| DELETE | `/v1/apikeys/{key_hash}` | Delete an API key |
-
-**Create key:**
-
-```json
-{
-  "name": "my-key",
-  "rate_limit": 100,
-  "rate_window": 60
-}
-```
+API keys are configured via the `SPARROW_API_KEY` environment variable (see Configuration). Include the key as `api_key` in the JSON request body, or via the `Authorization: Bearer` / `X-API-Key` header.
 
 ### Health & Stats
 
@@ -282,6 +277,7 @@ Every response includes provider metadata:
 | `SPARROW_HOST` | `0.0.0.0` | Bind address |
 | `SPARROW_PORT` | `8080` | Listen port |
 | `SPARROW_ROUTING` | `fair` | Routing mode (`fair`, `fast`, `quality`) |
+| `SPARROW_API_KEY` | *(empty)* | Comma-separated user-chosen API keys; validated from request body `api_key` field or auth header |
 | `SPARROW_WARP_ENABLED` | `false` | Enable WARP proxy |
 | `SPARROW_WARP_URL` | `socks5://warp:1080` | WARP SOCKS5 proxy URL |
 | `WARP_HEALTH_INTERVAL` | `60` | WARP health check interval (seconds) |
@@ -292,7 +288,7 @@ Every response includes provider metadata:
 
 ## providers.toml
 
-Providers and models are configured in `providers.toml`.
+Providers and models are configured in `providers.toml`. This file is **generated by `sparrow init`** and should not be edited manually. Run `sparrow init` to fetch the latest models from all providers and create/update this file.
 
 ### Provider entry
 
@@ -361,10 +357,10 @@ sparrow/
 │       ├── health.py       # Circuit breaker + health tracking
 │       ├── modes.py        # Routing strategy functions
 │       └── quota.py        # Daily quota tracker
-├── tests/                  # 60 tests (pytest + pytest-asyncio)
+├── tests/                  # 92 tests (pytest + pytest-asyncio)
 ├── scripts/
 │   └── init.sh             # Startup script
-├── providers.toml          # Provider/model configuration
+├── providers.toml          # **Generated by `sparrow init`** (Provider/model configuration)
 ├── docker-compose.yml      # Docker Compose (sparrow + WARP)
 ├── Dockerfile              # Python 3.12-slim + uv
 ├── pyproject.toml          # Project metadata + dev tools

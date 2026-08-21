@@ -9,7 +9,6 @@ from sparrow.adapters.base import ProviderAdapter
 
 logger = logging.getLogger("sparrow.adapters")
 
-
 class AdapterRegistry:
 
     def __init__(self) -> None:

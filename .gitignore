@@ -40,6 +40,7 @@ desktop.ini
 # Project generated files
 test-results.csv
 *.log
+providers.toml
 
 # Dev tools
 tools/
@@ -50,3 +51,9 @@ tools/
 
 # Docker runtime data
 *.pid
+
+# Environment files
+.env
+.env.local
+AGENTS.md
+providers.toml

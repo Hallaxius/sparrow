@@ -14,7 +14,6 @@ DEFAULT_ALIASES: dict[str, str] = {
     "auto": "fair",
 }
 
-
 class AliasResolver:
 
     def __init__(self, custom_aliases: dict[str, str] | None = None) -> None:

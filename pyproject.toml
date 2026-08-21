@@ -13,6 +13,8 @@ dependencies = [
     "uvicorn[standard]>=0.52",
     "pydantic>=2.10",
     "pydantic-settings>=2.15",
+    "prometheus-client>=0.20",
+    "tomli-w>=1.0",
 ]
 
 [project.optional-dependencies]

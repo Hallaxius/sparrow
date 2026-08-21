@@ -12,11 +12,10 @@ import httpx
 
 logger = logging.getLogger("sparrow.proxy")
 
-
 @dataclass
 class WARPConfig:
-    enabled: bool = False
-    proxy_url: str = ""
+    enabled: bool = True
+    proxy_url: str = "socks5://warp:1080"
     http_proxy_url: str = ""
     health_check_url: str = "https://cloudflare.com/cdn-cgi/trace"
     health_check_interval: int = 60
@@ -27,10 +26,9 @@ class WARPConfig:
 
     @classmethod
     def from_env(cls) -> WARPConfig:
-        proxy_url = os.getenv("SPARROW_WARP_URL", "")
-        enabled = os.getenv("SPARROW_WARP_ENABLED", "").lower() in ("1", "true", "yes")
-        if enabled and not proxy_url:
-            proxy_url = "socks5://warp:1080"
+        enabled_raw = os.getenv("SPARROW_WARP_ENABLED", "").lower()
+        enabled = enabled_raw not in ("0", "false", "no")
+        proxy_url = os.getenv("SPARROW_WARP_URL", "socks5://warp:1080")
         return cls(
             enabled=enabled,
             proxy_url=proxy_url,
@@ -42,7 +40,6 @@ class WARPConfig:
             max_keepalive=int(os.getenv("WARP_MAX_KEEPALIVE", "20")),
         )
 
-
 @dataclass
 class WARPHealth:
     healthy: bool = False
@@ -50,7 +47,6 @@ class WARPHealth:
     warp_status: str = "unknown"
     public_ip: str = ""
     consecutive_failures: int = 0
-
 
 class WARPProxy:
 

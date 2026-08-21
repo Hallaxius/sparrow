@@ -3,6 +3,11 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp
+
 
 class RateLimiter:
 
@@ -20,3 +25,21 @@ class RateLimiter:
             return False
         self._requests[client_ip].append(now)
         return True
+
+class RateLimiterMiddleware(BaseHTTPMiddleware):
+
+    def __init__(self, app: ASGIApp, max_requests: int = 100, window_seconds: int = 60) -> None:
+        super().__init__(app)
+        self._limiter = RateLimiter(max_requests, window_seconds)
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        if not client_ip:
+            client_ip = request.client.host if request.client else "unknown"
+        if not self._limiter.is_allowed(client_ip):
+            return JSONResponse(
+                {"error": "Rate limit exceeded", "retry_after": self._limiter._window},
+                status_code=429,
+                headers={"Retry-After": str(self._limiter._window)},
+            )
+        return await call_next(request)

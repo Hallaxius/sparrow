@@ -7,18 +7,16 @@ class EmbeddingRequest(BaseModel):
     model: str
     input: str | list[str]
     encoding_format: str | None = None
-
+    api_key: str | None = None
 
 class EmbeddingData(BaseModel):
     object: str = "embedding"
     embedding: list[float]
     index: int = 0
 
-
 class EmbeddingUsage(BaseModel):
     prompt_tokens: int = 0
     total_tokens: int = 0
-
 
 class EmbeddingResponse(BaseModel):
     object: str = "list"

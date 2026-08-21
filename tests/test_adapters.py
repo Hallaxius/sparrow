@@ -3,11 +3,7 @@ import pytest
 
 from sparrow.adapters.openai_compat import OpenAICompatAdapter
 from sparrow.adapters.registry import AdapterRegistry
-from sparrow.middleware.auth import (
-    APIKeyStore,
-    _generate_api_key,
-    _hash_key,
-)
+from sparrow.middleware.auth import APIKeyAuth, _generate_api_key
 
 
 class TestAdapterRegistry:
@@ -53,67 +49,6 @@ class TestAdapterRegistry:
             registry.register("p1", "P1", "https://api.p1.com", [])
 
 
-class TestAPIKeyStore:
-    def test_create_key(self):
-        store = APIKeyStore()
-        key = store.create_key("test-key")
-        assert key.startswith("sk-")
-        assert len(key) == 51
-
-    def test_validate_key(self):
-        store = APIKeyStore()
-        key = store.create_key("test-key")
-        info = store.validate_key(key)
-        assert info is not None
-        assert info.name == "test-key"
-        assert info.request_count == 1
-
-    def test_validate_invalid_key(self):
-        store = APIKeyStore()
-        info = store.validate_key("sk-invalid")
-        assert info is None
-
-    def test_rate_limiting(self):
-        store = APIKeyStore()
-        key = store.create_key("rate-test", rate_limit=2, rate_window=60)
-        info = store.validate_key(key)
-
-        assert store.is_rate_limited(info.key_hash) == (False, 0.0)
-        assert store.is_rate_limited(info.key_hash) == (False, 0.0)
-        limited, retry = store.is_rate_limited(info.key_hash)
-        assert limited is True
-        assert retry > 0
-
-    def test_list_keys(self):
-        store = APIKeyStore()
-        store.create_key("key-1")
-        store.create_key("key-2")
-        keys = store.list_keys()
-        assert len(keys) == 2
-        names = {k["name"] for k in keys}
-        assert names == {"key-1", "key-2"}
-
-    def test_delete_key(self):
-        store = APIKeyStore()
-        key = store.create_key("to-delete")
-        info = store.validate_key(key)
-        assert store.delete_key(info.key_hash) is True
-        assert store.validate_key(key) is None
-
-    def test_disable_key(self):
-        store = APIKeyStore()
-        key = store.create_key("to-disable")
-        info = store.validate_key(key)
-        assert store.disable_key(info.key_hash) is True
-        assert store.validate_key(key) is None
-
-    def test_hash_consistency(self):
-        key = "sk-test-key-123"
-        h1 = _hash_key(key)
-        h2 = _hash_key(key)
-        assert h1 == h2
-
-
 class TestGenerateAPIKey:
     def test_format(self):
         key = _generate_api_key()
@@ -123,3 +58,28 @@ class TestGenerateAPIKey:
     def test_uniqueness(self):
         keys = {_generate_api_key() for _ in range(100)}
         assert len(keys) == 100
+
+
+class TestAPIKeyAuth:
+    def test_valid_key(self):
+        auth = APIKeyAuth(key="key-1")
+        assert auth.is_valid("key-1") is True
+
+    def test_invalid_key(self):
+        auth = APIKeyAuth(key="key-1")
+        assert auth.is_valid("wrong-key") is False
+
+    def test_none_key(self):
+        auth = APIKeyAuth(key="key-1")
+        assert auth.is_valid(None) is False
+
+    def test_empty_key(self):
+        auth = APIKeyAuth(key=None)
+        assert auth.is_valid("anything") is False
+
+    def test_set_keys(self):
+        auth = APIKeyAuth(key="old-key")
+        assert auth.is_valid("old-key") is True
+        auth.set_keys("new-key")
+        assert auth.is_valid("old-key") is False
+        assert auth.is_valid("new-key") is True

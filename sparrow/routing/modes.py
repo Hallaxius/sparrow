@@ -7,7 +7,6 @@ from sparrow.routing.health import RouteHealthTracker
 def fair_select(routes: list[Route], index: int) -> Route:
     return routes[index % len(routes)]
 
-
 def quality_select(
     routes: list[Route],
     health: RouteHealthTracker | None = None,

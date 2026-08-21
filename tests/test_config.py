@@ -8,14 +8,12 @@ def test_load_config():
     assert config.port == 8080
     assert config.routing == "fair"
 
-
 def test_load_providers_toml():
     data = load_providers_toml()
     assert "providers" in data
     assert "ovhcloud" in data["providers"]
     assert "kilo" in data["providers"]
     assert "blockrun" in data["providers"]
-
 
 def test_alias_resolver():
     resolver = AliasResolver()

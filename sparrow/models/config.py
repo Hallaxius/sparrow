@@ -10,7 +10,6 @@ class ProviderModelConfig(BaseModel):
     quality: int = 5
     enabled: bool = True
 
-
 class ProviderConfig(BaseModel):
     name: str
     base_url: str

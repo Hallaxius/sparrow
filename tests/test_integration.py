@@ -24,7 +24,6 @@ def _build_registry_from_toml() -> tuple[AdapterRegistry, dict]:
 
     return registry, data
 
-
 def _build_routing_engine_from_toml() -> tuple[RoutingEngine, dict]:
     data = load_providers_toml()
     engine = RoutingEngine()
@@ -41,7 +40,6 @@ def _build_routing_engine_from_toml() -> tuple[RoutingEngine, dict]:
                 engine.register_route(route)
 
     return engine, data
-
 
 class TestTOMLIntegration:
 

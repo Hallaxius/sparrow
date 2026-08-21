@@ -8,10 +8,11 @@ RUN apt-get update && \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-COPY pyproject.toml uv.lock providers.toml ./
+COPY pyproject.toml uv.lock ./
 COPY sparrow/ sparrow/
-RUN uv sync --frozen --no-dev
+COPY entrypoint.sh /entrypoint.sh
+RUN uv sync --frozen --no-dev && chmod +x /entrypoint.sh
 
 EXPOSE 8080
 
-CMD ["uv", "run", "python", "-m", "sparrow"]
+ENTRYPOINT ["/entrypoint.sh"]

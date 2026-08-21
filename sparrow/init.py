@@ -199,10 +199,11 @@ async def run_init() -> int:
     warp = WARPProxy()
     await warp.start()
 
-    try:
+    if warp.is_warp_available():
+        logger.info("WARP proxy available, using proxy for model fetching")
         client = warp.get_client(use_proxy=True)
-    except RuntimeError:
-        logger.warning("WARP proxy not available, using direct connection")
+    else:
+        logger.warning("WARP proxy not available, using direct connection for model fetching")
         client = warp.get_client(use_proxy=False)
 
     total_fetched = 0

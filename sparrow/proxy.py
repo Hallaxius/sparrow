@@ -48,6 +48,19 @@ class WARPHealth:
     public_ip: str = ""
     consecutive_failures: int = 0
 
+async def check_warp_reachable(proxy_url: str, timeout: float = 5.0) -> bool:
+    try:
+        if not proxy_url.startswith("socks5://"):
+            return False
+        host_port = proxy_url[len("socks5://"):]
+        host = host_port.split(":")[0]
+        loop = asyncio.get_event_loop()
+        await asyncio.wait_for(loop.getaddrinfo(host, None), timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 class WARPProxy:
 
     def __init__(self, config: WARPConfig | None = None) -> None:
@@ -56,6 +69,7 @@ class WARPProxy:
         self._client: httpx.AsyncClient | None = None
         self._direct_client: httpx.AsyncClient | None = None
         self._health_task: asyncio.Task[None] | None = None
+        self._warp_available: bool | None = None
 
     async def start(self) -> None:
         if not self.config.enabled:
@@ -65,10 +79,20 @@ class WARPProxy:
             self._health_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._health_task
+
+        self._warp_available = await check_warp_reachable(self.config.proxy_url)
+        if not self._warp_available:
+            logger.warning("WARP proxy hostname not reachable, will use direct connections")
+            self.config.enabled = False
+            return
+
         self._client = self._build_client()
         if self.config.health_check_interval > 0:
             self._health_task = asyncio.create_task(self._health_loop())
         logger.info("WARP proxy started: %s", self.config.proxy_url)
+
+    def is_warp_available(self) -> bool:
+        return self._warp_available if self._warp_available is not None else False
 
     async def stop(self) -> None:
         if self._health_task:
@@ -103,9 +127,13 @@ class WARPProxy:
         return httpx.AsyncClient(**kwargs)
 
     def get_client(self, use_proxy: bool = True) -> httpx.AsyncClient:
-        if use_proxy and self._client is not None:
+        if use_proxy and self.is_warp_available() and self._client is not None:
             return self._client
         if not use_proxy:
+            if self._direct_client is None:
+                self._direct_client = self._build_client(use_proxy=False)
+            return self._direct_client
+        if use_proxy and not self.is_warp_available():
             if self._direct_client is None:
                 self._direct_client = self._build_client(use_proxy=False)
             return self._direct_client

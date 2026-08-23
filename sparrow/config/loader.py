@@ -38,10 +38,12 @@ def _build_provider_models_map(models: list[dict[str, Any]]) -> dict[str, list[d
     result: dict[str, list[dict[str, Any]]] = {}
     for model in models:
         provider_id = model.get("provider_id", "")
+        slug = model.get("slug", model.get("model", ""))
         if provider_id not in result:
             result[provider_id] = []
         result[provider_id].append({
-            "id": model.get("slug", model.get("model", "")),
+            "id": slug,
+            "slug": slug,
             "name": model.get("model", ""),
             "quality": DEFAULT_QUALITY,
             "context": DEFAULT_CONTEXT,

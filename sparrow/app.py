@@ -98,7 +98,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
             if model.get("enabled", True):
                 route = RoutingRoute(
                     provider_id=provider_id,
-                    model_id=model["id"],
+                    model_id=model.get("slug", model.get("id", "")),
                     quality=model.get("quality", 5),
                     context_window=model.get("context", 128000),
                 )
@@ -144,7 +144,7 @@ async def list_models(request: Request) -> JSONResponse:
         for provider_id, adapter in _adapter_registry.get_all().items():
             for model_id in adapter.available_models:
                 models.append({
-                    "id": f"{provider_id}/{model_id}",
+                    "id": model_id,
                     "object": "model",
                     "created": 0,
                     "owned_by": provider_id,

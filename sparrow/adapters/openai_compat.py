@@ -46,7 +46,7 @@ class OpenAICompatAdapter:
 
     @property
     def available_models(self) -> list[str]:
-        return [m["id"] for m in self._models if m.get("enabled", True)]
+        return [m.get("slug", m.get("id", "")) for m in self._models if m.get("enabled", True)]
 
     def is_available(self) -> bool:
         return len(self.available_models) > 0

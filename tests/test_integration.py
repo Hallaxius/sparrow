@@ -32,7 +32,7 @@ def _build_routing_engine() -> tuple[RoutingEngine, dict]:
             if model.get("enabled", True):
                 route = Route(
                     provider_id=provider_id,
-                    model_id=model["id"],
+                    model_id=model.get("slug", model.get("id", "")),
                     quality=model.get("quality", 5),
                     context_window=model.get("context", 128000),
                 )
@@ -99,7 +99,7 @@ class TestIntegration:
         models_by_provider: dict[str, str] = {}
         for pid, pdata in data.get("providers", {}).items():
             for m in pdata.get("models", []):
-                models_by_provider[m["id"]] = pid
+                models_by_provider[m["slug"]] = pid
 
         target_model = "nvidia/nemotron-3-super-120b-a12b:free"
         route = engine.select(target_model, RoutingMode.MODEL)

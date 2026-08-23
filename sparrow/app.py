@@ -19,8 +19,7 @@ from sparrow.adapters.base import ProviderAdapter
 from sparrow.adapters.registry import AdapterRegistry
 from sparrow.cache import ResponseCache
 from sparrow.client import SparrowClient
-from sparrow.config.aliases import AliasResolver
-from sparrow.config.loader import load_aliases, load_providers_toml
+from sparrow.config.loader import load_all_providers
 from sparrow.dashboard import DASHBOARD_HTML
 from sparrow.metrics import metrics_endpoint as _metrics_endpoint
 from sparrow.metrics import record_cache_hit, record_cache_miss, record_request
@@ -54,7 +53,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 _client: SparrowClient | None = None
 _routing_engine: RoutingEngine | None = None
 _stats: StatsTracker | None = None
-_alias_resolver: AliasResolver | None = None
 _adapter_registry: AdapterRegistry | None = None
 _cache: ResponseCache | None = None
 _quota: QuotaTracker | None = None
@@ -63,16 +61,11 @@ _start_time: float = 0.0
 
 @asynccontextmanager
 async def lifespan(app: Starlette) -> AsyncIterator[None]:
-    global _client, _routing_engine, _stats, _alias_resolver, _adapter_registry, _start_time, _cache, _quota, _structured_logger
+    global _client, _routing_engine, _stats, _adapter_registry, _start_time, _cache, _quota, _structured_logger
 
     _start_time = time.time()
     _stats = StatsTracker()
     _structured_logger = StructuredLogger()
-
-    toml_aliases = load_aliases()
-    _alias_resolver = AliasResolver(
-        custom_aliases=toml_aliases if toml_aliases else None,
-    )
 
     _cache = ResponseCache()
     _quota = QuotaTracker()
@@ -84,7 +77,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
     _adapter_registry = AdapterRegistry()
     _adapter_registry.set_client(_client.get_client(use_warp=True))
 
-    providers_data = load_providers_toml()
+    providers_data = load_all_providers()
     for provider_id, provider_data in providers_data.get("providers", {}).items():
         base_url = provider_data.get("base_url", "")
         provider_name = provider_data.get("name", provider_id)
@@ -203,8 +196,6 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
     model_input = body.get("model", "auto")
-    if _alias_resolver:
-        model_input = _alias_resolver.resolve(model_input)
 
     max_tokens = body.get("max_tokens")
 
@@ -364,8 +355,6 @@ async def embeddings(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
     model_input = body.get("model", "auto")
-    if _alias_resolver:
-        model_input = _alias_resolver.resolve(model_input)
 
     if _routing_engine is None or _adapter_registry is None:
         return JSONResponse({"error": "Routing not initialized"}, status_code=500)

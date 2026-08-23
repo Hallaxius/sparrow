@@ -1,4 +1,4 @@
-from sparrow.config.loader import load_aliases
+
 from sparrow.routing.engine import Route, RoutingEngine
 from sparrow.routing.quota import QuotaTracker
 
@@ -102,27 +102,3 @@ def test_max_tokens_specific_model():
     assert len(candidates) == 1
     assert candidates[0].provider_id == "p2"
 
-def test_load_aliases_returns_dict():
-    aliases = load_aliases()
-    assert isinstance(aliases, dict)
-
-def test_load_aliases_contains_known_aliases():
-    aliases = load_aliases()
-    assert aliases["gpt-4o"] == "kilo/nvidia/nemotron-3-super-120b-a12b:free"
-    assert aliases["gpt-4o-mini"] == "kilo/openrouter/free"
-    assert aliases["claude-3.5-sonnet"] == "kilo/nvidia/nemotron-3-ultra-550b-a55b:free"
-    assert aliases["claude-3-haiku"] == "opencode/mimo-v2.5-free"
-    assert aliases["deepseek-r1"] == "opencode/deepseek-v4-flash-free"
-    assert aliases["gemini-2.5-flash"] == "opencode/deepseek-v4-flash-free"
-    assert aliases["mistral-small"] == "ovhcloud/Mistral-Small-3.2-24B-Instruct-2506"
-    assert aliases["auto"] == "fair"
-
-def test_load_aliases_has_expected_count():
-    aliases = load_aliases()
-    assert len(aliases) == 8
-
-def test_load_aliases_values_are_strings():
-    aliases = load_aliases()
-    for key, value in aliases.items():
-        assert isinstance(key, str), f"Alias key {key!r} is not a string"
-        assert isinstance(value, str), f"Alias value for {key!r} is not a string"

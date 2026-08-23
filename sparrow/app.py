@@ -248,6 +248,12 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                         "success" if stream_success else "error",
                         latency_ms / 1000,
                     )
+                    if _routing_engine and _routing_engine._health:
+                        breaker = _routing_engine._health.get_breaker(f"{_provider}:{_model}")
+                        if stream_success:
+                            breaker.record_success()
+                        else:
+                            breaker.record_failure()
 
             try:
                 return StreamingResponse(
@@ -303,6 +309,10 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
             if _cache:
                 _cache.set(route.provider_id, model_input, body, resp_json)
 
+            if _routing_engine and _routing_engine._health:
+                breaker = _routing_engine._health.get_breaker(f"{route.provider_id}:{route.model_id}")
+                breaker.record_success()
+
             if _structured_logger:
                 _structured_logger.log_request(
                     method=request.method,
@@ -322,6 +332,9 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                 _stats.record_request(route.provider_id, success=False, latency_ms=latency_ms)
             record_request(route.provider_id, route.model_id, "error", latency_ms / 1000)
             last_error = e
+            if _routing_engine and _routing_engine._health:
+                breaker = _routing_engine._health.get_breaker(f"{route.provider_id}:{route.model_id}")
+                breaker.record_failure()
             if _structured_logger:
                 _structured_logger.log_error(
                     message=f"Failover: {route.provider_id}/{route.model_id} failed ({type(e).__name__})",

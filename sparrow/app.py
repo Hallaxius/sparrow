@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
+import random
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -15,7 +18,6 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from sparrow.adapters.base import ProviderAdapter
 from sparrow.adapters.registry import AdapterRegistry
 from sparrow.cache import ResponseCache
 from sparrow.client import SparrowClient
@@ -31,10 +33,16 @@ from sparrow.models import ChatRequest, EmbeddingRequest
 from sparrow.proxy import WARPProxy
 from sparrow.routing.engine import Route as RoutingRoute
 from sparrow.routing.engine import RoutingEngine
+from sparrow.routing.health import RouteHealthTracker
 from sparrow.routing.quota import QuotaTracker
 from sparrow.stats import StatsTracker
 
 logger = logging.getLogger("sparrow")
+
+_MAX_RETRIES_429 = 3
+_RETRY_BASE_DELAY = 1.0
+_RETRY_MAX_DELAY = 10.0
+_RETRY_BACKOFF_FACTOR = 2.0
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
@@ -56,12 +64,13 @@ _stats: StatsTracker | None = None
 _adapter_registry: AdapterRegistry | None = None
 _cache: ResponseCache | None = None
 _quota: QuotaTracker | None = None
+_health: RouteHealthTracker | None = None
 _structured_logger: StructuredLogger | None = None
 _start_time: float = 0.0
 
 @asynccontextmanager
 async def lifespan(app: Starlette) -> AsyncIterator[None]:
-    global _client, _routing_engine, _stats, _adapter_registry, _start_time, _cache, _quota, _structured_logger
+    global _client, _routing_engine, _stats, _adapter_registry, _start_time, _cache, _quota, _health, _structured_logger
 
     _start_time = time.time()
     _stats = StatsTracker()
@@ -69,6 +78,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
 
     _cache = ResponseCache()
     _quota = QuotaTracker()
+    _health = RouteHealthTracker()
 
     warp = WARPProxy()
     _client = SparrowClient(warp_proxy=warp)
@@ -92,7 +102,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
             )
 
         if _routing_engine is None:
-            _routing_engine = RoutingEngine(quota=_quota)
+            _routing_engine = RoutingEngine(health_tracker=_health, quota=_quota)
 
         for model in models:
             if model.get("enabled", True):
@@ -219,17 +229,70 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                 continue
 
             chat_req.model = route.model_id
+
+            first_chunk: str | None = None
+            remaining_gen: AsyncIterator[str] | None = None
             stream_success = True
 
+            for attempt in range(_MAX_RETRIES_429 + 1):
+                try:
+                    gen = adapter.chat_completion_stream(chat_req, route.model_id)
+                    first_chunk = await gen.__anext__()
+                    remaining_gen = gen
+                    break
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429 and attempt < _MAX_RETRIES_429:
+                        retry_after = e.response.headers.get("retry-after")
+                        delay = _RETRY_BASE_DELAY
+                        if retry_after:
+                            with contextlib.suppress(ValueError):
+                                delay = min(float(retry_after), _RETRY_MAX_DELAY)
+                        delay = min(delay * (_RETRY_BACKOFF_FACTOR ** attempt), _RETRY_MAX_DELAY)
+                        delay += random.uniform(0, 0.5)
+                        logger.warning(
+                            "Streaming 429 retry %d/%d from %s/%s in %.1fs",
+                            attempt + 1, _MAX_RETRIES_429,
+                            route.provider_id, route.model_id, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    logger.warning(
+                        "Failover: %s/%s stream failed (HTTP %d), trying next",
+                        route.provider_id, route.model_id, e.response.status_code,
+                    )
+                    break
+                except Exception as e:
+                    logger.warning(
+                        "Failover: %s/%s stream failed (%s), trying next",
+                        route.provider_id, route.model_id, type(e).__name__,
+                    )
+                    break
+            else:
+                logger.warning(
+                    "Streaming 429 exhausted for %s/%s, trying next candidate",
+                    route.provider_id, route.model_id,
+                )
+
+            if first_chunk is None or remaining_gen is None:
+                latency_ms = (time.time() - start) * 1000
+                if _stats:
+                    _stats.record_request(route.provider_id, success=False, latency_ms=latency_ms)
+                record_request(route.provider_id, route.model_id, "error", latency_ms / 1000)
+                if _routing_engine and _routing_engine._health:
+                    breaker = _routing_engine._health.get_breaker(f"{route.provider_id}:{route.model_id}")
+                    breaker.record_failure()
+                continue
+
             async def _stream_events(
-                _adapter: ProviderAdapter,
-                _chat_req: ChatRequest,
-                _model: str,
+                _first: str,
+                _gen: AsyncIterator[str],
                 _provider: str,
+                _model: str,
             ) -> AsyncIterator[str]:
                 nonlocal stream_success
                 try:
-                    async for chunk in _adapter.chat_completion_stream(_chat_req, _model):
+                    yield f"data: {_first}\n\n"
+                    async for chunk in _gen:
                         yield f"data: {chunk}\n\n"
                     yield "data: [DONE]\n\n"
                 except Exception as e:
@@ -255,21 +318,17 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                         else:
                             breaker.record_failure()
 
-            try:
-                return StreamingResponse(
-                    _stream_events(adapter, chat_req, route.model_id, route.provider_id),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",
-                        "X-Sparrow-Provider": route.provider_id,
-                        "X-Sparrow-Model": route.model_id,
-                    },
-                )
-            except Exception:
-                logger.warning("Failover: %s/%s failed, trying next", route.provider_id, route.model_id)
-                continue
+            return StreamingResponse(
+                _stream_events(first_chunk, remaining_gen, route.provider_id, route.model_id),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                    "X-Sparrow-Provider": route.provider_id,
+                    "X-Sparrow-Model": route.model_id,
+                },
+            )
 
         return JSONResponse(
             {"error": "All providers failed for streaming"},
@@ -292,17 +351,45 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
 
         chat_req.model = route.model_id
 
-        try:
-            response = await adapter.chat_completion(chat_req, route.model_id)
+        route_response = None
+        for attempt in range(_MAX_RETRIES_429 + 1):
+            try:
+                route_response = await adapter.chat_completion(chat_req, route.model_id)
+                break
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < _MAX_RETRIES_429:
+                    retry_after = 0.0
+                    header_val = e.response.headers.get("retry-after")
+                    if header_val:
+                        with contextlib.suppress(ValueError):
+                            retry_after = float(header_val)
+                    delay = min(
+                        retry_after if retry_after > 0 else _RETRY_BASE_DELAY * (_RETRY_BACKOFF_FACTOR ** attempt),
+                        _RETRY_MAX_DELAY,
+                    )
+                    delay += random.uniform(0, min(delay * 0.3, 1.0))
+                    logger.warning(
+                        "429 from %s/%s, retry %d/%d in %.1fs",
+                        route.provider_id, route.model_id, attempt + 1, _MAX_RETRIES_429, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                last_error = e
+                break
+            except Exception as e:
+                last_error = e
+                break
+
+        if route_response is not None:
             latency_ms = (time.time() - start) * 1000
             if _stats:
-                tokens = response.usage.total_tokens if response.usage else 0
+                tokens = route_response.usage.total_tokens if route_response.usage else 0
                 _stats.record_request(route.provider_id, success=True, latency_ms=latency_ms, tokens=tokens)
             record_request(route.provider_id, route.model_id, "success", latency_ms / 1000)
             if _quota:
                 _quota.record(route.provider_id, route.model_id)
 
-            resp_json = response.model_dump()
+            resp_json = route_response.model_dump()
             resp_json["x_sparrow_provider"] = route.provider_id
             resp_json["x_sparrow_model"] = route.model_id
 
@@ -326,28 +413,26 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
 
             return JSONResponse(resp_json)
 
-        except (httpx.TimeoutException, httpx.HTTPStatusError, Exception) as e:
-            latency_ms = (time.time() - start) * 1000
-            if _stats:
-                _stats.record_request(route.provider_id, success=False, latency_ms=latency_ms)
-            record_request(route.provider_id, route.model_id, "error", latency_ms / 1000)
-            last_error = e
-            if _routing_engine and _routing_engine._health:
-                breaker = _routing_engine._health.get_breaker(f"{route.provider_id}:{route.model_id}")
-                breaker.record_failure()
-            if _structured_logger:
-                _structured_logger.log_error(
-                    message=f"Failover: {route.provider_id}/{route.model_id} failed ({type(e).__name__})",
-                    request_id=request_id,
-                    method=request.method,
-                    path=request.url.path,
-                    provider=route.provider_id,
-                )
-            logger.warning(
-                "Failover: %s/%s failed (%s), trying next",
-                route.provider_id, route.model_id, type(e).__name__,
+        latency_ms = (time.time() - start) * 1000
+        if _stats:
+            _stats.record_request(route.provider_id, success=False, latency_ms=latency_ms)
+        record_request(route.provider_id, route.model_id, "error", latency_ms / 1000)
+        if _routing_engine and _routing_engine._health:
+            breaker = _routing_engine._health.get_breaker(f"{route.provider_id}:{route.model_id}")
+            breaker.record_failure()
+        if _structured_logger and last_error is not None:
+            _structured_logger.log_error(
+                message=f"Failover: {route.provider_id}/{route.model_id} failed ({type(last_error).__name__})",
+                request_id=request_id,
+                method=request.method,
+                path=request.url.path,
+                provider=route.provider_id,
             )
-            continue
+        logger.warning(
+            "Failover: %s/%s failed (%s), trying next",
+            route.provider_id, route.model_id, type(last_error).__name__ if last_error else "unknown",
+        )
+        continue
 
     if isinstance(last_error, httpx.TimeoutException):
         return JSONResponse({"error": "All providers timed out"}, status_code=504)

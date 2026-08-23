@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+from fake_useragent import UserAgent
 
 from sparrow.models import (
     ChatChoice,
@@ -18,6 +19,16 @@ from sparrow.models import (
     EmbeddingUsage,
     Usage,
 )
+
+_GPT_CHAT_HEADERS: dict[str, str] = {
+    "Referer": "https://gpt.chat/",
+    "Origin": "https://gpt.chat",
+}
+
+_CODEX_CHAT_HEADERS: dict[str, str] = {
+    "Referer": "https://codex.chat/",
+    "Origin": "https://codex.chat",
+}
 
 
 class OpenAICompatAdapter:
@@ -35,6 +46,22 @@ class OpenAICompatAdapter:
         self._base_url = base_url.rstrip("/")
         self._models = models
         self._client = client
+        self._ua = UserAgent()
+
+        if "gpt.chat" in self._base_url:
+            self._chat_path = "/api/chat"
+            self._extra_headers = dict(_GPT_CHAT_HEADERS)
+        elif "codex.chat" in self._base_url:
+            self._chat_path = "/api/chat"
+            self._extra_headers = dict(_CODEX_CHAT_HEADERS)
+        else:
+            self._chat_path = "/chat/completions"
+            self._extra_headers = {}
+
+    def _build_headers(self) -> dict[str, str]:
+        headers = dict(self._extra_headers)
+        headers["User-Agent"] = self._ua.random
+        return headers
 
     @property
     def id(self) -> str:
@@ -54,11 +81,11 @@ class OpenAICompatAdapter:
     async def chat_completion(
         self, request: ChatRequest, model: str, **kwargs: object
     ) -> ChatResponse:
-        url = f"{self._base_url}/chat/completions"
+        url = f"{self._base_url}{self._chat_path}"
         payload = request.model_dump(exclude_none=True)
         payload["model"] = model
 
-        response = await self._client.post(url, json=payload)
+        response = await self._client.post(url, json=payload, headers=self._build_headers())
         response.raise_for_status()
         data = response.json()
 
@@ -80,12 +107,12 @@ class OpenAICompatAdapter:
     async def chat_completion_stream(
         self, request: ChatRequest, model: str, **kwargs: object
     ) -> AsyncIterator[str]:
-        url = f"{self._base_url}/chat/completions"
+        url = f"{self._base_url}{self._chat_path}"
         payload = request.model_dump(exclude_none=True)
         payload["model"] = model
         payload["stream"] = True
 
-        async with self._client.stream("POST", url, json=payload) as response:
+        async with self._client.stream("POST", url, json=payload, headers=self._build_headers()) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
@@ -105,7 +132,7 @@ class OpenAICompatAdapter:
         if request.encoding_format:
             payload["encoding_format"] = request.encoding_format
 
-        response = await self._client.post(url, json=payload)
+        response = await self._client.post(url, json=payload, headers=self._build_headers())
         response.raise_for_status()
         data = response.json()
 

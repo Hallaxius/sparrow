@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -35,14 +34,6 @@ def load_models_json() -> list[dict[str, Any]]:
     return []
 
 
-def load_providers_toml() -> dict[str, Any]:
-    config_path = PROJECT_ROOT / "providers.toml"
-    if config_path.exists():
-        with open(config_path, "rb") as f:
-            return tomllib.load(f)
-    return {}
-
-
 def _build_provider_models_map(models: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     result: dict[str, list[dict[str, Any]]] = {}
     for model in models:
@@ -62,9 +53,6 @@ def _build_provider_models_map(models: list[dict[str, Any]]) -> dict[str, list[d
 def load_all_providers() -> dict[str, Any]:
     providers_list = load_providers_json()
     models_list = load_models_json()
-
-    if not providers_list:
-        return load_providers_toml()
 
     models_by_provider = _build_provider_models_map(models_list)
 

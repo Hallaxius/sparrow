@@ -10,6 +10,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 COPY pyproject.toml uv.lock ./
 COPY sparrow/ sparrow/
+COPY providers.json models.json ./
 COPY entrypoint.sh /entrypoint.sh
 RUN uv sync --frozen --no-dev && chmod +x /entrypoint.sh
 

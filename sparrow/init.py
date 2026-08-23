@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -130,45 +129,6 @@ def is_model_free(provider_id: str, model: dict[str, Any]) -> bool:
     return False
 
 
-SEED_PROVIDERS = {
-    "ovhcloud": {
-        "name": "OVHcloud",
-        "base_url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
-        "adapter": "openai",
-        "auth": "none",
-        "models": [],
-    },
-    "kilo": {
-        "name": "Kilo Gateway",
-        "base_url": "https://api.kilo.ai/api/gateway",
-        "adapter": "openai",
-        "auth": "none",
-        "models": [],
-    },
-    "opencode": {
-        "name": "OpenCode Zen",
-        "base_url": "https://opencode.ai/zen/v1",
-        "adapter": "openai",
-        "auth": "none",
-        "models": [],
-    },
-    "llm7": {
-        "name": "LLM7",
-        "base_url": "https://api.llm7.io/v1",
-        "adapter": "openai",
-        "auth": "none",
-        "models": [],
-    },
-    "blockrun": {
-        "name": "BlockRun",
-        "base_url": "https://blockrun.ai/api/v1",
-        "adapter": "openai",
-        "auth": "none",
-        "models": [],
-    },
-}
-
-
 
 async def fetch_models_from_provider(
     provider_id: str, base_url: str, client: httpx.AsyncClient
@@ -260,18 +220,9 @@ def load_existing_providers() -> dict[str, Any]:
         }
 
     if result_providers:
-        return {"providers": result_providers, "aliases": {}}
+        return {"providers": result_providers}
 
-    providers_toml_path = PROJECT_ROOT / "providers.toml"
-    if providers_toml_path.exists():
-        with open(providers_toml_path, "rb") as f:
-            return tomllib.load(f)
     return {}
-
-
-def get_seed_config() -> dict[str, Any]:
-    """Return the hardcoded seed configuration for providers."""
-    return {"providers": SEED_PROVIDERS}
 
 
 def merge_models(
@@ -319,9 +270,8 @@ async def run_init() -> int:
     providers = providers_data.get("providers", {})
 
     if not providers:
-        logger.info("No providers.toml found, using seed configuration")
-        seed = get_seed_config()
-        providers = seed["providers"]
+        logger.info("No providers found, nothing to update")
+        return 0
 
     warp = WARPProxy()
     await warp.start()

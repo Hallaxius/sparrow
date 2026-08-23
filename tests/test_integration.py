@@ -3,12 +3,12 @@ from __future__ import annotations
 import httpx
 
 from sparrow.adapters.registry import AdapterRegistry
-from sparrow.config.loader import load_providers_toml
+from sparrow.config.loader import load_all_providers
 from sparrow.routing.engine import Route, RoutingEngine, RoutingMode
 
 
-def _build_registry_from_toml() -> tuple[AdapterRegistry, dict]:
-    data = load_providers_toml()
+def _build_registry() -> tuple[AdapterRegistry, dict]:
+    data = load_all_providers()
     registry = AdapterRegistry()
     client = httpx.AsyncClient()
     registry.set_client(client)
@@ -23,8 +23,8 @@ def _build_registry_from_toml() -> tuple[AdapterRegistry, dict]:
 
     return registry, data
 
-def _build_routing_engine_from_toml() -> tuple[RoutingEngine, dict]:
-    data = load_providers_toml()
+def _build_routing_engine() -> tuple[RoutingEngine, dict]:
+    data = load_all_providers()
     engine = RoutingEngine()
 
     for provider_id, provider_data in data.get("providers", {}).items():
@@ -40,22 +40,20 @@ def _build_routing_engine_from_toml() -> tuple[RoutingEngine, dict]:
 
     return engine, data
 
-class TestTOMLIntegration:
+class TestIntegration:
 
     def test_providers_loaded(self):
-        registry, _data = _build_registry_from_toml()
+        registry, _data = _build_registry()
         providers = registry.list_providers()
-        assert len(providers) == 5
-        assert "ovhcloud" in providers
-        assert "kilo" in providers
-        assert "opencode" in providers
-        assert "llm7" in providers
-        assert "blockrun" in providers
+        assert len(providers) == 7
+        providers_data = _data.get("providers", {})
+        for pid in providers:
+            assert pid in providers_data
 
     def test_adapter_types(self):
         from sparrow.adapters.openai_compat import OpenAICompatAdapter
 
-        registry, _ = _build_registry_from_toml()
+        registry, _ = _build_registry()
         for provider_id in registry.list_providers():
             adapter = registry.get(provider_id)
             assert adapter is not None
@@ -65,7 +63,7 @@ class TestTOMLIntegration:
     def test_adapter_base_urls(self):
         from sparrow.adapters.openai_compat import OpenAICompatAdapter
 
-        registry, data = _build_registry_from_toml()
+        registry, data = _build_registry()
         for provider_id, provider_data in data.get("providers", {}).items():
             adapter = registry.get(provider_id)
             assert adapter is not None
@@ -74,7 +72,7 @@ class TestTOMLIntegration:
             assert adapter._base_url == expected_url
 
     def test_enabled_models_only(self):
-        registry, data = _build_registry_from_toml()
+        registry, data = _build_registry()
         for provider_id, provider_data in data.get("providers", {}).items():
             adapter = registry.get(provider_id)
             assert adapter is not None
@@ -86,7 +84,7 @@ class TestTOMLIntegration:
             assert set(adapter.available_models) == expected_enabled
 
     def test_routing_engine_route_count(self):
-        engine, data = _build_routing_engine_from_toml()
+        engine, data = _build_routing_engine()
         expected_count = sum(
             1
             for pd in data.get("providers", {}).values()
@@ -96,20 +94,26 @@ class TestTOMLIntegration:
         assert engine.route_count == expected_count
 
     def test_routing_select_per_model(self):
-        engine, _data = _build_routing_engine_from_toml()
+        engine, data = _build_routing_engine()
 
-        route = engine.select("nvidia/nemotron-3-super-120b-a12b:free", RoutingMode.MODEL)
-        assert route.provider_id == "kilo"
-        assert route.model_id == "nvidia/nemotron-3-super-120b-a12b:free"
+        models_by_provider: dict[str, str] = {}
+        for pid, pdata in data.get("providers", {}).items():
+            for m in pdata.get("models", []):
+                models_by_provider[m["id"]] = pid
+
+        target_model = "nvidia/nemotron-3-super-120b-a12b:free"
+        route = engine.select(target_model, RoutingMode.MODEL)
+        assert route.model_id == target_model
+        assert route.provider_id == models_by_provider[target_model]
 
     def test_routing_select_auto_fair(self):
-        engine, _ = _build_routing_engine_from_toml()
+        engine, _ = _build_routing_engine()
         route = engine.select("auto", RoutingMode.FAIR)
         assert route.provider_id != ""
         assert route.model_id != ""
 
     def test_routing_fair_round_robin(self):
-        engine, _ = _build_routing_engine_from_toml()
+        engine, _ = _build_routing_engine()
         routes_seen = set()
         for _ in range(50):
             route = engine.select("auto", RoutingMode.FAIR)
@@ -135,13 +139,10 @@ class TestTOMLIntegration:
         assert route.quality == 9
 
     def test_all_providers_have_models(self):
-        registry, _ = _build_registry_from_toml()
+        registry, _ = _build_registry()
         for provider_id in registry.list_providers():
             adapter = registry.get(provider_id)
             assert adapter is not None
-            # llm7 has no free models (all paid), skip it
-            if provider_id == "llm7":
-                continue
             assert len(adapter.available_models) > 0, (
                 f"Provider {provider_id} has no enabled models"
             )

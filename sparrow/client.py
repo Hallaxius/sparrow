@@ -55,8 +55,7 @@ class SparrowClient:
         await self.warp.start()
         if self.warp.config.proxy_url:
             self._warp_client = _build_warp_client(self.warp)
-        else:
-            self._direct_client = _build_direct_client(self.warp)
+        self._direct_client = _build_direct_client(self.warp)
 
     async def stop(self) -> None:
         warp_client = self._warp_client
@@ -75,10 +74,8 @@ class SparrowClient:
                 await self.warp.stop()
 
     def get_client(self, use_warp: bool = True) -> httpx.AsyncClient:
-        if use_warp:
-            if self._warp_client is not None:
-                return self._warp_client
-            raise RuntimeError("WARP proxy not available. Call start() to initialize.")
+        if use_warp and self._warp_client is not None and self.warp.is_warp_available():
+            return self._warp_client
         if self._direct_client is not None:
             return self._direct_client
         raise RuntimeError("SparrowClient not started. Call start() first.")

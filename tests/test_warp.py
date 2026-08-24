@@ -121,11 +121,31 @@ class TestWARPProxy:
 
         asyncio.run(client.aclose())
 
-    def test_sparrow_client_does_not_return_direct_client_for_warp_request(self):
-        client = SparrowClient(WARPProxy(WARPConfig()))
+    def test_sparrow_client_falls_back_to_direct_when_warp_unavailable(self):
+        warp_proxy = WARPProxy(WARPConfig())
+        client = SparrowClient(warp_proxy)
         client._direct_client = MagicMock()
+        client._warp_client = MagicMock()
 
-        with pytest.raises(RuntimeError, match="WARP"):
+        with patch.object(warp_proxy, "is_warp_available", return_value=False):
+            result = client.get_client(use_warp=True)
+
+        assert result is client._direct_client
+
+    def test_sparrow_client_returns_warp_when_available(self):
+        warp_proxy = WARPProxy(WARPConfig())
+        client = SparrowClient(warp_proxy)
+        client._direct_client = MagicMock()
+        client._warp_client = MagicMock()
+
+        with patch.object(warp_proxy, "is_warp_available", return_value=True):
+            result = client.get_client(use_warp=True)
+
+        assert result is client._warp_client
+
+    def test_sparrow_client_raises_when_neither_client_initialized(self):
+        client = SparrowClient(WARPProxy(WARPConfig()))
+        with pytest.raises(RuntimeError, match="SparrowClient not started"):
             client.get_client(use_warp=True)
 
 

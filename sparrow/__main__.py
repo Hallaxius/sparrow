@@ -2,11 +2,12 @@ import argparse
 
 import uvicorn
 
-from sparrow.config.loader import load_config
+from sparrow.config.loader import load_all_providers, load_config
 
 
 def run_server() -> None:
     config = load_config()
+    load_all_providers()
     uvicorn.run(
         "sparrow.app:create_app",
         host=config.host,
@@ -24,14 +25,23 @@ def run_init() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="sparrow",
-        description="SparroW - OpenAI-compatible router for keyless free LLM providers",
+        description=(
+            "SparroW - OpenAI-compatible router for keyless free LLM providers. "
+            "Startup requires a valid JSON provider configuration before readiness; "
+            "run 'sparrow init' explicitly to refresh providers.json and models.json."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    subparsers.add_parser(
+    init_parser = subparsers.add_parser(
         "init",
-        help="Fetch models from providers and update providers.toml",
+        help="Explicitly refresh provider models in the configured JSON files before readiness",
+        description=(
+            "Fetch provider models and atomically update providers.json and models.json. "
+            "Use this explicit init command before starting the server when provider readiness data must be refreshed."
+        ),
     )
+    init_parser.set_defaults(command="init")
 
     args = parser.parse_args()
 

@@ -7,7 +7,6 @@ from typing import Any
 
 @dataclass
 class ProviderStats:
-
     requests: int = 0
     successes: int = 0
     failures: int = 0
@@ -27,8 +26,8 @@ class ProviderStats:
             return 0.0
         return self.total_latency_ms / self.successes
 
-class StatsTracker:
 
+class StatsTracker:
     def __init__(self) -> None:
         self._providers: dict[str, ProviderStats] = {}
         self._total_requests: int = 0

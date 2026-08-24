@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 
 
 class QuotaTracker:
-
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._counters: dict[str, int] = {}
@@ -24,14 +23,31 @@ class QuotaTracker:
     def _key(self, provider_id: str, model: str) -> str:
         return f"{provider_id}:{model}"
 
-    def can_request(self, provider_id: str, model: str, limit: int = -1) -> bool:
-        if limit == -1:
+    def can_request(self, provider_id: str, model: str, limit: int | None = -1) -> bool:
+        self._validate_limit(limit)
+        if limit is None or limit == -1:
             return True
 
         with self._lock:
             self._maybe_reset()
             key = self._key(provider_id, model)
             return self._counters.get(key, 0) < limit
+
+    @staticmethod
+    def _validate_limit(limit: int | None) -> None:
+        if limit is not None and limit < -1:
+            raise ValueError("quota limit must be non-negative or -1 for unlimited")
+
+    def try_acquire(self, provider_id: str, model: str, limit: int | None = None) -> bool:
+        self._validate_limit(limit)
+        with self._lock:
+            self._maybe_reset()
+            key = self._key(provider_id, model)
+            current = self._counters.get(key, 0)
+            if limit is not None and limit != -1 and current >= limit:
+                return False
+            self._counters[key] = current + 1
+            return True
 
     def record(self, provider_id: str, model: str) -> None:
         with self._lock:

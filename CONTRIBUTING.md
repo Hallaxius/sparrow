@@ -22,6 +22,8 @@ cd sparrow
 uv sync
 ```
 
+Copy `.env.example` to `.env` and set `SPARROW_API_KEY`. The runtime provider source is the validated `providers.json` and `models.json`; use `sparrow init` explicitly when refreshing it.
+
 ---
 
 ## Development Workflow
@@ -29,12 +31,17 @@ uv sync
 ### Running the proxy locally
 
 ```bash
+cp .env.example .env
+# Set SPARROW_API_KEY before starting the local server.
 uv run python -m sparrow
 ```
 
 ### Running with Docker
 
 ```bash
+cp .env.example .env
+# Set SPARROW_API_KEY before starting Compose.
+docker compose config --quiet
 docker compose up -d --build
 docker compose logs -f sparrow
 ```
@@ -45,7 +52,7 @@ docker compose logs -f sparrow
 uv run pytest tests/ -v
 ```
 
-All 60 tests must pass before submitting a PR.
+All tests must pass before submitting a PR. The suite currently contains tests.
 
 ### Linting
 
@@ -59,6 +66,23 @@ uv run ruff format sparrow/ tests/
 ```bash
 uv run mypy sparrow/
 ```
+
+### Required verification order
+
+```bash
+uv run ruff check sparrow/ tests/
+uv run mypy sparrow/
+uv run pytest tests/ -v
+uv run python -m compileall -q sparrow tests
+```
+
+### Runtime contracts
+
+Protected API endpoints require `Authorization: Bearer YOUR-KEY`; `X-API-Key` remains available for compatibility. API keys in request bodies are rejected. `/healthz` is public liveness, while `/readyz` is public readiness and returns `503` until the process, routes, and required WARP are ready.
+
+Routing supports `fair`, `fast`, `quality`, and `model`. The request model `auto` selects all eligible models. A request is limited to four dispatched attempts and two attempts per route; retryable upstream failures are bounded by the total deadline and `Retry-After`.
+
+The cache is disabled by default and applies only to deterministic, non-streaming chat requests.
 
 ---
 
@@ -75,17 +99,29 @@ uv run mypy sparrow/
 
 ## Adding a New Provider
 
-1. Add the provider to `providers.toml`:
+1. Add the provider to `providers.json` and `models.json`:
 
-```toml
-[providers.new-provider]
-name = "New Provider"
-base_url = "https://api.newprovider.com/v1"
-adapter = "openai"
-auth = "none"
-models = [
-    { id = "model-id", name = "Model Name", context = 128000, quality = 5, enabled = true },
-]
+**providers.json:**
+```json
+{
+  "providers": {
+    "new-provider-uuid": {
+      "name": "New Provider",
+      "base_url": "https://api.newprovider.com/v1",
+      "adapter": "openai",
+      "auth": "none"
+    }
+  }
+}
+```
+
+**models.json:**
+```json
+{
+  "new-provider-uuid": [
+    { "id": "model-id", "name": "Model Name", "context": 128000, "quality": 5, "enabled": true }
+  ]
+}
 ```
 
 2. If the provider uses a non-OpenAI API, create a new adapter in `sparrow/adapters/` implementing the `ProviderAdapter` protocol from `base.py`

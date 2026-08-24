@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import secrets
 import threading
 
@@ -9,12 +8,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 
-def _generate_api_key() -> str:
-    return f"sk-{secrets.token_hex(24)}"
-
-
 class APIKeyAuth:
-
     def __init__(self, key: str | None = None) -> None:
         self._key: str | None = key
 
@@ -22,7 +16,9 @@ class APIKeyAuth:
         self._key = key
 
     def is_valid(self, raw_key: str | None) -> bool:
-        return raw_key is not None and self._key is not None and raw_key == self._key
+        if raw_key is None or self._key is None:
+            return False
+        return secrets.compare_digest(raw_key, self._key)
 
 
 _api_key_auth: APIKeyAuth | None = None
@@ -38,16 +34,40 @@ def get_api_key_auth() -> APIKeyAuth:
     return _api_key_auth
 
 
-PUBLIC_PATHS = frozenset({"/healthz", "/metrics"})
+PUBLIC_PATHS = frozenset({"/", "/healthz", "/readyz"})
 
-PROTECTED_PATHS = frozenset({"/v1/chat/completions", "/v1/embeddings"})
+PROTECTED_PATHS = frozenset(
+    {
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/v1/models",
+        "/v1/providers",
+        "/stats",
+        "/metrics",
+    }
+)
+
+
+def _authentication_error() -> JSONResponse:
+    return JSONResponse(
+        {"error": "Authentication required"},
+        status_code=401,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _header_api_key(request: Request) -> str | None:
+    authorization = request.headers.get("Authorization")
+    if authorization is not None:
+        scheme, separator, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not separator:
+            return None
+        return token.strip() or None
+    return request.headers.get("X-API-Key", "").strip() or None
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
 
         if path in PUBLIC_PATHS:
@@ -56,42 +76,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path not in PROTECTED_PATHS:
             return await call_next(request)
 
-        api_key: str | None = None
-
-        content_type = request.headers.get("content-type", "")
-        if "json" in content_type:
-            try:
-                body = await request.body()
-                if body:
-                    parsed = json.loads(body)
-                    if isinstance(parsed, dict):
-                        api_key = parsed.get("api_key")
-            except (json.JSONDecodeError, ValueError):
-                pass
+        api_key = _header_api_key(request)
 
         if not api_key:
-            auth_header = request.headers.get("Authorization", "")
-            if auth_header.startswith("Bearer "):
-                api_key = auth_header[7:].strip() or None
-
-        if not api_key:
-            api_key = request.headers.get("X-API-Key") or None
-
-        if not api_key:
-            return JSONResponse(
-                {
-                    "error": "API key required",
-                    "message": "Provide 'api_key' in the request body or an Authorization/X-API-Key header",
-                },
-                status_code=401,
-            )
+            return _authentication_error()
 
         auth = get_api_key_auth()
         if not auth.is_valid(api_key):
-            return JSONResponse(
-                {"error": "Invalid API key"},
-                status_code=401,
-            )
+            return _authentication_error()
 
         request.state.api_key = api_key
         return await call_next(request)

@@ -33,15 +33,19 @@ ACTIVE_CONNECTIONS = Counter(
     "Number of active connections",
 )
 
+
 def record_request(provider: str, model: str, status: str, duration_seconds: float) -> None:
     REQUEST_COUNT.labels(provider=provider, model=model, status=status).inc()
     REQUEST_DURATION.labels(provider=provider, model=model).observe(duration_seconds)
 
+
 def record_cache_hit(provider: str) -> None:
     CACHE_HITS.labels(provider=provider).inc()
 
+
 def record_cache_miss(provider: str) -> None:
     CACHE_MISSES.labels(provider=provider).inc()
+
 
 def metrics_endpoint() -> Response:
     return Response(

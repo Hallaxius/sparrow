@@ -1,4 +1,5 @@
 import os
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -6,8 +7,16 @@ import pytest
 @pytest.fixture(autouse=True)
 def _set_test_api_key():
     os.environ["SPARROW_API_KEY"] = "test-key"
+    os.environ.setdefault("SPARROW_WARP_HEALTH_INTERVAL", "0")
     yield
     os.environ.pop("SPARROW_API_KEY", None)
+    os.environ.pop("SPARROW_WARP_HEALTH_INTERVAL", None)
+
+
+@pytest.fixture(autouse=True)
+def _mock_warp_reachable():
+    with patch("sparrow.proxy.check_warp_reachable", new=AsyncMock(return_value=True)):
+        yield
 
 
 @pytest.fixture(autouse=True)

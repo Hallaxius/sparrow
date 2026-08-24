@@ -1,5 +1,6 @@
 import pytest
 
+from sparrow.config.aliases import AliasResolutionError, AliasResolver, ModelTarget
 from sparrow.errors import AllProvidersExhaustedError
 from sparrow.routing.engine import Route, RoutingEngine, RoutingMode
 
@@ -9,6 +10,7 @@ def test_register_route():
     route = Route(provider_id="test", model_id="model-1", quality=8)
     engine.register_route(route)
     assert len(engine._routes) == 1
+
 
 def test_select_fair():
     engine = RoutingEngine()
@@ -24,6 +26,7 @@ def test_select_fair():
     assert r2.provider_id == "p2"
     assert r3.provider_id == "p3"
 
+
 def test_select_quality():
     engine = RoutingEngine()
     engine.register_route(Route("p1", "m1", quality=5))
@@ -33,6 +36,7 @@ def test_select_quality():
     route = engine.select("auto", RoutingMode.QUALITY)
     assert route.provider_id == "p2"
 
+
 def test_select_specific_model():
     engine = RoutingEngine()
     engine.register_route(Route("p1", "m1", quality=5))
@@ -41,7 +45,52 @@ def test_select_specific_model():
     route = engine.select("m2", RoutingMode.FAIR)
     assert route.model_id == "m2"
 
+
 def test_all_providers_exhausted():
     engine = RoutingEngine()
     with pytest.raises(AllProvidersExhaustedError):
         engine.select("nonexistent-model")
+
+
+def test_alias_resolver_resolves_direct_models_and_aliases():
+    resolver = AliasResolver(
+        aliases={"best": "p2/m2"},
+        provider_models={"p1": {"m1"}, "p2": {"m2"}},
+    )
+
+    assert resolver.resolve("auto") == ModelTarget(provider_id=None, model_id="auto")
+    assert resolver.resolve("m1") == ModelTarget(provider_id=None, model_id="m1")
+    assert resolver.resolve("best") == ModelTarget(provider_id="p2", model_id="m2")
+
+
+@pytest.mark.parametrize("model", ["unknown", "p1", "p1/"])
+def test_alias_resolver_rejects_unknown_or_malformed_models(model):
+    resolver = AliasResolver(
+        aliases={"best": "p2/m2"},
+        provider_models={"p1": {"m1"}, "p2": {"m2"}},
+    )
+
+    with pytest.raises(AliasResolutionError):
+        resolver.resolve(model)
+
+
+def test_auto_is_all_models_but_fair_is_an_explicit_model():
+    engine = RoutingEngine()
+    engine.register_route(Route("p1", "fair"))
+    engine.register_route(Route("p2", "other"))
+
+    assert [(route.provider_id, route.model_id) for route in engine.get_candidates("auto")] == [
+        ("p1", "fair"),
+        ("p2", "other"),
+    ]
+    assert [(route.provider_id, route.model_id) for route in engine.get_candidates("fair")] == [("p1", "fair")]
+
+
+def test_configured_routing_mode_orders_candidates():
+    engine = RoutingEngine(mode=RoutingMode.QUALITY)
+    engine.register_route(Route("slow", "shared", quality=2, avg_latency_ms=100))
+    engine.register_route(Route("best", "shared", quality=9, avg_latency_ms=50))
+
+    candidates = engine.ordered_candidates("shared")
+
+    assert [route.provider_id for route in candidates] == ["best", "slow"]

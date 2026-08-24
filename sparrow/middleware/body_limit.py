@@ -9,7 +9,6 @@ from starlette.types import ASGIApp
 
 
 class BodySizeLimitMiddleware(BaseHTTPMiddleware):
-
     _ROUTE_LIMITS: ClassVar[dict[str, int]] = {
         "/v1/chat/completions": 1_048_576,
         "/v1/embeddings": 512_000,
@@ -22,9 +21,7 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
     def _get_limit(self, path: str) -> int:
         return self._ROUTE_LIMITS.get(path, self._max_body_size)
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method in ("GET", "HEAD", "DELETE", "OPTIONS"):
             return await call_next(request)
 

@@ -34,16 +34,31 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 <div class="card"><h2>Status</h2><div id="si">Loading...</div></div>
 <div class="card"><h2>Statistics</h2><div id="so">Loading...</div></div>
 </div>
+<div class="card" style="margin-bottom:1.5rem"><h2>Dashboard Access</h2><input id="ak" type="password" placeholder="SparroW API key"><button id="load" type="button">Load data</button></div>
 <div class="card" style="margin-bottom:1.5rem"><h2>Providers</h2><div id="pl">Loading...</div></div>
 <div class="card"><h2>Available Models</h2><div id="ml" class="mg">Loading...</div></div>
 <footer>SparroW &mdash; <a href="/healthz">Health</a> | <a href="/stats">Stats</a> | <a href="/v1/models">Models</a></footer>
 <script>
+function apiKey(){
+  var input=document.getElementById("ak");
+  var key=input.value.trim()||sessionStorage.getItem("sparrow_api_key")||window.prompt("Enter SparroW API key");
+  if(key){input.value=key;sessionStorage.setItem("sparrow_api_key",key);}
+  return key;
+}
+async function fetchData(path,headers){
+  var response=await fetch(path,{headers:headers});
+  if(!response.ok)throw new Error("Request failed: "+response.status);
+  return response.json();
+}
 async function loadData(){
   try{
-    var h=await(await fetch("/healthz")).json();
-    var s=await(await fetch("/stats")).json();
-    var p=await(await fetch("/v1/providers")).json();
-    var m=await(await fetch("/v1/models")).json();
+    var key=apiKey();
+    if(!key)throw new Error("API key required");
+    var headers={"Authorization":"Bearer "+key};
+    var h=await fetchData("/healthz",{});
+    var s=await fetchData("/stats",headers);
+    var p=await fetchData("/v1/providers",headers);
+    var m=await fetchData("/v1/models",headers);
     function S(l,v){return '<div class="st"><span class="l">'+l+'</span><span class="v">'+v+'</span></div>';}
     function U(t){if(!t)return'-';var h=Math.floor(t/3600),m=Math.floor(t%3600/60);return h?h+'h '+m+'m':m+'m';}
     function P(r){return(r*100).toFixed(1)+'%';}
@@ -75,6 +90,7 @@ async function loadData(){
     document.getElementById("si").innerHTML='<div style="color:#f85149">Error: '+e.message+'</div>';
   }
 }
+document.getElementById("load").addEventListener("click",loadData);
 loadData();
 setInterval(loadData,15000);
 </script>

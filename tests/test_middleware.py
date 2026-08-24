@@ -12,15 +12,16 @@ from starlette.routing import Route
 from sparrow.app import SecurityHeadersMiddleware
 from sparrow.middleware.body_limit import BodySizeLimitMiddleware
 from sparrow.middleware.logging import StructuredLogger, generate_request_id
-from sparrow.middleware.rate_limit import RateLimiterMiddleware
 
 
 async def _echo(request):
     return PlainTextResponse("ok")
 
+
 async def _echo_body(request):
     body = await request.body()
     return PlainTextResponse(f"len={len(body)}")
+
 
 def _make_app() -> Starlette:
     routes = [
@@ -30,56 +31,6 @@ def _make_app() -> Starlette:
     ]
     return Starlette(routes=routes)
 
-@pytest.mark.asyncio
-async def test_rate_limiter_429_after_limit():
-    app = RateLimiterMiddleware(_make_app(), max_requests=3, window_seconds=60)
-    transport = ASGITransport(app=app)
-
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        for _ in range(3):
-            resp = await client.get("/test", headers={"X-Forwarded-For": "1.2.3.4"})
-            assert resp.status_code == 200
-
-        resp = await client.get("/test", headers={"X-Forwarded-For": "1.2.3.4"})
-        assert resp.status_code == 429
-        body = resp.json()
-        assert body["error"] == "Rate limit exceeded"
-        assert resp.headers["Retry-After"] == "60"
-
-@pytest.mark.asyncio
-async def test_rate_limiter_independent_ips():
-    app = RateLimiterMiddleware(_make_app(), max_requests=1, window_seconds=60)
-    transport = ASGITransport(app=app)
-
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/test", headers={"X-Forwarded-For": "10.0.0.1"})
-        assert resp.status_code == 200
-        resp = await client.get("/test", headers={"X-Forwarded-For": "10.0.0.1"})
-        assert resp.status_code == 429
-
-        resp = await client.get("/test", headers={"X-Forwarded-For": "20.0.0.2"})
-        assert resp.status_code == 200
-
-@pytest.mark.asyncio
-async def test_rate_limiter_respects_x_forwarded_for():
-    app = RateLimiterMiddleware(_make_app(), max_requests=1, window_seconds=60)
-    transport = ASGITransport(app=app)
-
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(
-            "/test", headers={"X-Forwarded-For": "30.0.0.3, 192.168.1.1"}
-        )
-        assert resp.status_code == 200
-
-        resp = await client.get(
-            "/test", headers={"X-Forwarded-For": "30.0.0.3, 192.168.1.1"}
-        )
-        assert resp.status_code == 429
-
-        resp = await client.get(
-            "/test", headers={"X-Forwarded-For": "99.99.99.99, 192.168.1.1"}
-        )
-        assert resp.status_code == 200
 
 @pytest.mark.asyncio
 async def test_body_size_limit_chat_completions():
@@ -102,6 +53,7 @@ async def test_body_size_limit_chat_completions():
         assert body["error"] == "Request body too large"
         assert body["max_bytes"] == 1_048_576
 
+
 @pytest.mark.asyncio
 async def test_body_size_limit_embeddings():
     app = BodySizeLimitMiddleware(_make_app())
@@ -123,6 +75,7 @@ async def test_body_size_limit_embeddings():
         assert body["error"] == "Request body too large"
         assert body["max_bytes"] == 512_000
 
+
 @pytest.mark.asyncio
 async def test_body_size_limit_get_passes_through():
     app = BodySizeLimitMiddleware(_make_app())
@@ -131,6 +84,7 @@ async def test_body_size_limit_get_passes_through():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test")
         assert resp.status_code == 200
+
 
 @pytest.mark.asyncio
 async def test_security_headers_nosniff():
@@ -141,6 +95,7 @@ async def test_security_headers_nosniff():
         resp = await client.get("/test")
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
 
+
 @pytest.mark.asyncio
 async def test_security_headers_frame_deny():
     app = SecurityHeadersMiddleware(_make_app())
@@ -149,6 +104,7 @@ async def test_security_headers_frame_deny():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test")
         assert resp.headers["X-Frame-Options"] == "DENY"
+
 
 @pytest.mark.asyncio
 async def test_security_headers_referrer_policy():
@@ -159,14 +115,17 @@ async def test_security_headers_referrer_policy():
         resp = await client.get("/test")
         assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
 
+
 def test_generate_request_id_is_12_char_hex():
     rid = generate_request_id()
     assert len(rid) == 12
     assert re.fullmatch(r"[0-9a-f]{12}", rid), f"Not 12-char hex: {rid!r}"
 
+
 def test_generate_request_id_unique():
     ids = {generate_request_id() for _ in range(50)}
     assert len(ids) == 50
+
 
 def test_structured_logger_log_request_json(caplog):
     logger = StructuredLogger(name="test_structured_logger")

@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import httpx
 
 from sparrow.adapters.base import ProviderAdapter
+from sparrow.models.config import ProviderModelRuntime
 
 logger = logging.getLogger("sparrow.adapters")
 
-class AdapterRegistry:
 
+class AdapterRegistry:
     def __init__(self) -> None:
         self._adapters: dict[str, ProviderAdapter] = {}
         self._client: httpx.AsyncClient | None = None
@@ -23,7 +23,7 @@ class AdapterRegistry:
         provider_id: str,
         provider_name: str,
         base_url: str,
-        models: list[dict[str, Any]],
+        models: list[ProviderModelRuntime],
     ) -> ProviderAdapter:
         if self._client is None:
             raise RuntimeError("AdapterRegistry client not initialized. Call set_client() first.")

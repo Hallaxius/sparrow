@@ -14,7 +14,6 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.15",
     "prometheus-client>=0.20",
-    "tomli-w>=1.0",
     "fake-useragent>=2.2.0",
 ]
 

@@ -1,1 +1,55 @@
-[{"id":"0de24b8c-78c7-4714-a4a7-5e82ed198009","name":"GPT.chat","base_url":"https://gpt.chat","created_at":"2026-08-22 20:20:16.491098"},{"id":"1321946a-0d1a-4c00-882e-c626e19047e5","name":"Opencode Zen","base_url":"https://opencode.ai/zen/v1","created_at":"2026-08-22 20:20:16.491098"},{"id":"17b72315-1e87-4a43-b86d-e455bfe57051","name":"BlockRun","base_url":"https://blockrun.ai/api/v1","created_at":"2026-08-22 20:20:16.491098"},{"id":"a16ce1ab-4e9d-446e-85ec-34974be6091a","name":"Kilo Gateway","base_url":"https://api.kilo.ai/api/openrouter/","created_at":"2026-08-22 20:20:16.491098"},{"id":"c193adf9-0783-40fa-a892-3ad8463a2fb6","name":"OVH Cloud","base_url":"https://oai.endpoints.kepler.ai.cloud.ovh.net/v1","created_at":"2026-08-22 20:20:16.491098"},{"id":"d570f28d-96f7-481d-bde0-170e57fb1a06","name":"Codex.chat","base_url":"https://codex.chat","created_at":"2026-08-22 20:20:16.491098"},{"id":"f3100559-d247-449a-baa1-5092dc4fcf6c","name":"LLM7.io","base_url":"https://api.llm7.io/v1","created_at":"2026-08-22 20:20:16.491098"}]
+{
+  "providers": {
+    "0de24b8c-78c7-4714-a4a7-5e82ed198009": {
+      "name": "GPT.chat",
+      "base_url": "https://gpt.chat",
+      "adapter": "openai",
+      "auth": "none"
+    },
+    "1321946a-0d1a-4c00-882e-c626e19047e5": {
+      "name": "Opencode Zen",
+      "base_url": "https://opencode.ai/zen/v1",
+      "adapter": "openai",
+      "auth": "none"
+    },
+    "17b72315-1e87-4a43-b86d-e455bfe57051": {
+      "name": "BlockRun",
+      "base_url": "https://blockrun.ai/api/v1",
+      "adapter": "openai",
+      "auth": "none"
+    },
+    "a16ce1ab-4e9d-446e-85ec-34974be6091a": {
+      "name": "Kilo Gateway",
+      "base_url": "https://api.kilo.ai/api/openrouter/",
+      "adapter": "openai",
+      "auth": "none"
+    },
+    "c193adf9-0783-40fa-a892-3ad8463a2fb6": {
+      "name": "OVH Cloud",
+      "base_url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+      "adapter": "openai",
+      "auth": "none"
+    },
+    "d570f28d-96f7-481d-bde0-170e57fb1a06": {
+      "name": "Codex.chat",
+      "base_url": "https://codex.chat",
+      "adapter": "openai",
+      "auth": "none"
+    },
+    "f3100559-d247-449a-baa1-5092dc4fcf6c": {
+      "name": "LLM7.io",
+      "base_url": "https://api.llm7.io/v1",
+      "adapter": "openai",
+      "auth": "none"
+    }
+  },
+  "aliases": {
+    "gpt-4o": "a16ce1ab-4e9d-446e-85ec-34974be6091a/nvidia/nemotron-3-super-120b-a12b:free",
+    "gpt-4o-mini": "a16ce1ab-4e9d-446e-85ec-34974be6091a/openrouter/free",
+    "claude-3.5-sonnet": "a16ce1ab-4e9d-446e-85ec-34974be6091a/nvidia/nemotron-3-ultra-550b-a55b:free",
+    "claude-3-haiku": "1321946a-0d1a-4c00-882e-c626e19047e5/hy3-free",
+    "deepseek-r1": "f3100559-d247-449a-baa1-5092dc4fcf6c/DeepSeek-V4-Flash-0731",
+    "gemini-2.5-flash": "f3100559-d247-449a-baa1-5092dc4fcf6c/gemini-3.1-flash-lite",
+    "mistral-small": "c193adf9-0783-40fa-a892-3ad8463a2fb6/Mistral-Small-3.2-24B-Instruct-2506"
+  }
+}

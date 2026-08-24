@@ -1,61 +1,51 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
+from sparrow.client import SparrowClient, _build_warp_client
+from sparrow.config.models import Settings
 from sparrow.proxy import WARPConfig, WARPHealth, WARPProxy
 
 
 class TestWARPConfig:
     def test_defaults(self):
         config = WARPConfig()
-        assert config.enabled is True
         assert config.proxy_url == "socks5://warp:1080"
 
-    def test_from_env_default_enabled(self):
-        with patch.dict("os.environ", {}, clear=False):
-            config = WARPConfig.from_env()
-            assert config.enabled is True
-            assert config.proxy_url == "socks5://warp:1080"
+    def test_settings_validate_warp_url_and_limits(self, monkeypatch):
+        monkeypatch.setenv("SPARROW_WARP_URL", "socks5h://custom:1081")
+        monkeypatch.setenv("WARP_HEALTH_INTERVAL", "15")
+        monkeypatch.setenv("WARP_CONNECT_TIMEOUT", "3.5")
+        monkeypatch.setenv("WARP_READ_TIMEOUT", "12")
+        monkeypatch.setenv("WARP_MAX_CONNECTIONS", "40")
+        monkeypatch.setenv("WARP_MAX_KEEPALIVE", "7")
 
-    def test_from_env_explicit_opt_out(self):
-        with patch.dict("os.environ", {"SPARROW_WARP_ENABLED": "false"}, clear=False):
-            config = WARPConfig.from_env()
-            assert config.enabled is False
+        settings = Settings()
+        config = WARPConfig.from_settings(settings)
 
-    def test_from_env_opt_out_zero(self):
-        with patch.dict("os.environ", {"SPARROW_WARP_ENABLED": "0"}, clear=False):
-            config = WARPConfig.from_env()
-            assert config.enabled is False
+        assert config.proxy_url == "socks5h://custom:1081"
+        assert config.health_check_interval == 15
+        assert config.connect_timeout == 3.5
+        assert config.read_timeout == 12
+        assert config.max_connections == 40
+        assert config.max_keepalive == 7
 
-    def test_from_env_opt_out_no(self):
-        with patch.dict("os.environ", {"SPARROW_WARP_ENABLED": "no"}, clear=False):
-            config = WARPConfig.from_env()
-            assert config.enabled is False
+    @pytest.mark.parametrize(
+        "environment",
+        [
+            {"SPARROW_WARP_URL": "https://not-a-socks-proxy"},
+            {"WARP_CONNECT_TIMEOUT": "invalid"},
+            {"WARP_MAX_CONNECTIONS": "0"},
+        ],
+    )
+    def test_settings_reject_invalid_warp_values(self, monkeypatch, environment):
+        for name, value in environment.items():
+            monkeypatch.setenv(name, value)
+        with pytest.raises(ValidationError):
+            Settings()
 
-    def test_from_env_enabled(self):
-        with patch.dict("os.environ", {
-            "SPARROW_WARP_ENABLED": "true",
-            "SPARROW_WARP_URL": "socks5://warp:1080",
-        }, clear=False):
-            config = WARPConfig.from_env()
-            assert config.enabled is True
-            assert config.proxy_url == "socks5://warp:1080"
-
-    def test_from_env_enabled_auto_url(self):
-        with patch.dict("os.environ", {
-            "SPARROW_WARP_ENABLED": "1",
-        }, clear=False):
-            config = WARPConfig.from_env()
-            assert config.enabled is True
-            assert config.proxy_url == "socks5://warp:1080"
-
-    def test_from_env_custom_proxy_url(self):
-        with patch.dict("os.environ", {
-            "SPARROW_WARP_URL": "socks5://custom:1080",
-        }, clear=False):
-            config = WARPConfig.from_env()
-            assert config.enabled is True
-            assert config.proxy_url == "socks5://custom:1080"
 
 class TestWARPHealth:
     def test_defaults(self):
@@ -63,43 +53,42 @@ class TestWARPHealth:
         assert health.healthy is False
         assert health.warp_status == "unknown"
 
-class TestWARPProxy:
-    def test_init_disabled(self):
-        proxy = WARPProxy(config=WARPConfig(enabled=False))
-        assert proxy.config.enabled is False
 
-    def test_get_status_disabled(self):
-        proxy = WARPProxy(config=WARPConfig(enabled=False))
+class TestWARPProxy:
+    def test_requires_explicit_config(self):
+        with pytest.raises(TypeError):
+            WARPProxy()
+
+    def test_get_status_always_enabled(self):
+        proxy = WARPProxy(config=WARPConfig())
         status = proxy.get_status()
-        assert status["warp_enabled"] is False
+        assert status["warp_enabled"] is True
 
     def test_build_client_no_proxy(self):
-        proxy = WARPProxy(config=WARPConfig(enabled=False))
+        proxy = WARPProxy(config=WARPConfig())
         client = proxy._build_client(use_proxy=False)
         assert client is not None
 
     def test_build_client_with_proxy(self):
-        config = WARPConfig(enabled=True, proxy_url="socks5://warp:1080")
+        config = WARPConfig(proxy_url="socks5://warp:1080")
         proxy = WARPProxy(config=config)
         client = proxy._build_client(use_proxy=True)
         assert client is not None
 
     @pytest.mark.asyncio
-    async def test_start_stop_disabled(self):
-        proxy = WARPProxy(config=WARPConfig(enabled=False))
-        await proxy.start()
-        assert proxy._client is None
+    async def test_unavailable_warp_keeps_proxy_mode_without_direct_fallback(self):
+        proxy = WARPProxy(config=WARPConfig(proxy_url="socks5://warp:1080"))
+        with patch("sparrow.proxy.check_warp_reachable", new=AsyncMock(return_value=False)):
+            await proxy.start()
+
+        assert proxy.is_warp_available() is False
+        assert proxy._client is not None
+        assert proxy.get_client(use_proxy=True) is proxy._client
         await proxy.stop()
 
     @pytest.mark.asyncio
-    async def test_check_health_disabled(self):
-        proxy = WARPProxy(config=WARPConfig(enabled=False))
-        result = await proxy.check_health()
-        assert result is True
-
-    @pytest.mark.asyncio
     async def test_check_health_failure(self):
-        config = WARPConfig(enabled=True, proxy_url="socks5://invalid:9999")
+        config = WARPConfig(proxy_url="socks5://invalid:9999")
         proxy = WARPProxy(config=config)
         with patch.object(proxy, "_build_client") as mock_build:
             mock_client = AsyncMock()
@@ -111,28 +100,45 @@ class TestWARPProxy:
             assert result is False
             assert proxy.health.consecutive_failures == 1
 
-    @pytest.mark.asyncio
-    async def test_health_loop_cancellation(self):
-        proxy = WARPProxy(config=WARPConfig(enabled=False))
-        await proxy.start()
-        await proxy.stop()
+    def test_warp_client_uses_configured_transport_without_direct_fallback(self):
+        config = WARPConfig(
+            proxy_url="socks5://warp:1080",
+            connect_timeout=3.5,
+            read_timeout=12.0,
+            max_connections=40,
+            max_keepalive=7,
+        )
+        proxy = WARPProxy(config=config)
+        client = _build_warp_client(proxy)
+
+        assert isinstance(client._transport, httpx.AsyncHTTPTransport)
+        assert client.timeout.connect == 3.5
+        assert client.timeout.read == 12.0
+        assert client._transport._pool._max_connections == 40
+        assert client._transport._pool._max_keepalive_connections == 7
+
+        import asyncio
+
+        asyncio.run(client.aclose())
+
+    def test_sparrow_client_does_not_return_direct_client_for_warp_request(self):
+        client = SparrowClient(WARPProxy(WARPConfig()))
+        client._direct_client = MagicMock()
+
+        with pytest.raises(RuntimeError, match="WARP"):
+            client.get_client(use_warp=True)
+
 
 class TestWARPIntegration:
-
     @pytest.mark.asyncio
     async def test_health_check_parsing(self):
-        config = WARPConfig(enabled=True, proxy_url="socks5://warp:1080")
+        config = WARPConfig(proxy_url="socks5://warp:1080")
         proxy = WARPProxy(config=config)
 
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.text = (
-            "warp=on\n"
-            "ip=203.0.113.42\n"
-            "colo=JFK\n"
-            "gateway=yes"
-        )
+        mock_response.text = "warp=on\nip=203.0.113.42\ncolo=JFK\ngateway=yes"
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -145,7 +151,7 @@ class TestWARPIntegration:
 
     @pytest.mark.asyncio
     async def test_health_check_warp_off(self):
-        config = WARPConfig(enabled=True, proxy_url="socks5://warp:1080")
+        config = WARPConfig(proxy_url="socks5://warp:1080")
         proxy = WARPProxy(config=config)
 
         mock_client = AsyncMock()
@@ -163,7 +169,7 @@ class TestWARPIntegration:
 
     @pytest.mark.asyncio
     async def test_proxy_ip_rotation_simulation(self):
-        config = WARPConfig(enabled=True, proxy_url="socks5://warp:1080")
+        config = WARPConfig(proxy_url="socks5://warp:1080")
         proxy = WARPProxy(config=config)
 
         mock_responses = []

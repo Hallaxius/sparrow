@@ -40,7 +40,6 @@ desktop.ini
 # Project generated files
 test-results.csv
 *.log
-providers.toml
 
 # Dev tools
 tools/
@@ -56,4 +55,3 @@ tools/
 .env
 .env.local
 AGENTS.md
-providers.toml

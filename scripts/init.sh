@@ -18,12 +18,10 @@ fi
 export SPARROW_HOST="${SPARROW_HOST:-0.0.0.0}"
 export SPARROW_PORT="${SPARROW_PORT:-8080}"
 export SPARROW_ROUTING="${SPARROW_ROUTING:-fair}"
-export SPARROW_WARP_ENABLED="${SPARROW_WARP_ENABLED:-true}"
 export SPARROW_WARP_URL="${SPARROW_WARP_URL:-socks5://warp:1080}"
 
 echo ""
 echo "Starting SparroW + WARP..."
-echo "  WARP:     ${SPARROW_WARP_ENABLED}"
 echo "  Routing:  ${SPARROW_ROUTING}"
 echo "  Port:     ${SPARROW_PORT}"
 echo ""

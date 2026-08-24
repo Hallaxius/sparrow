@@ -12,9 +12,11 @@ class ModelInfo(BaseModel):
     quality_score: int = 0
     capabilities: list[str] = []
 
+
 class ModelList(BaseModel):
     object: str = "list"
     data: list[ModelInfo]
+
 
 class ProviderInfo(BaseModel):
     id: str
@@ -24,6 +26,7 @@ class ProviderInfo(BaseModel):
     base_url: str
     models: list[str]
     available: bool
+
 
 class RouteHealth(BaseModel):
     provider: str

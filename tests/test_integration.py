@@ -1,13 +1,109 @@
 from __future__ import annotations
 
+import os
+import shlex
+import shutil
+import subprocess
+from pathlib import Path
+
 import httpx
+import pytest
 
 from sparrow.adapters.registry import AdapterRegistry
 from sparrow.config.loader import load_all_providers
+from sparrow.models.config import ProvidersRuntime
 from sparrow.routing.engine import Route, RoutingEngine, RoutingMode
 
+PROJECT_ROOT = Path(__file__).parent.parent
 
-def _build_registry() -> tuple[AdapterRegistry, dict]:
+
+def write_uv_stub(bin_dir: Path) -> None:
+    uv_stub = bin_dir / "uv"
+    uv_stub.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\"\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    uv_stub.chmod(0o755)
+
+
+def bash_path(path: Path) -> str:
+    if os.name != "nt":
+        return str(path)
+    resolved = path.resolve()
+    drive = resolved.drive.rstrip(":").lower()
+    return f"/mnt/{drive}{resolved.as_posix()[2:]}"
+
+
+def run_entrypoint(
+    tmp_path: Path, config_file: Path | None = None, api_key: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required to exercise entrypoint.sh")
+    app_dir = tmp_path / "app"
+    bin_dir = tmp_path / "bin"
+    app_dir.mkdir()
+    bin_dir.mkdir()
+    write_uv_stub(bin_dir)
+    env = os.environ.copy()
+    if api_key is None:
+        env.pop("SPARROW_API_KEY", None)
+    command_parts = [
+        f'PATH={shlex.quote(bash_path(bin_dir))}:"$PATH"',
+        f"SPARROW_APP_DIR={shlex.quote(bash_path(app_dir))}",
+    ]
+    if config_file is not None:
+        command_parts.append(f"SPARROW_CONFIG_FILE={shlex.quote(bash_path(config_file))}")
+    if api_key is not None:
+        command_parts.append(f"SPARROW_API_KEY={shlex.quote(api_key)}")
+    command_parts.append(shlex.quote(bash_path(PROJECT_ROOT / "entrypoint.sh")))
+    return subprocess.run(
+        [bash, "-lc", " ".join(command_parts)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def test_entrypoint_fails_when_configured_json_is_missing(tmp_path):
+    config_file = tmp_path / "missing.json"
+
+    result = run_entrypoint(tmp_path, config_file)
+
+    assert result.returncode != 0
+    assert "configuration file not found" in result.stderr
+    assert "sparrow init" in result.stderr
+    assert "init" not in result.stdout
+
+
+def test_entrypoint_starts_server_when_configured_json_exists(tmp_path):
+    providers_file = tmp_path / "providers.json"
+    models_file = tmp_path / "models.json"
+    providers_file.write_text('{"providers": {"p1": {"name": "P1", "base_url": "https://x.com/v1", "adapter": "openai", "auth": "none"}}, "aliases": {}}', encoding="utf-8")
+    models_file.write_text('{"p1": [{"id": "m1", "name": "M1", "context": 128000, "quality": 5, "enabled": true}]}', encoding="utf-8")
+
+    result = run_entrypoint(tmp_path, providers_file, api_key="test-key")
+
+    assert result.returncode == 0
+    assert result.stdout.splitlines()[-4:] == ["run", "python", "-m", "sparrow"]
+    assert "init" not in result.stdout
+
+
+def test_entrypoint_fails_when_api_key_is_missing(tmp_path):
+    providers_file = tmp_path / "providers.json"
+    models_file = tmp_path / "models.json"
+    providers_file.write_text('{"providers": {"p1": {"name": "P1", "base_url": "https://x.com/v1", "adapter": "openai", "auth": "none"}}, "aliases": {}}', encoding="utf-8")
+    models_file.write_text('{"p1": [{"id": "m1", "name": "M1", "context": 128000, "quality": 5, "enabled": true}]}', encoding="utf-8")
+
+    result = run_entrypoint(tmp_path, providers_file)
+
+    assert result.returncode != 0
+    assert "SPARROW_API_KEY is required" in result.stderr
+
+
+def _build_registry() -> tuple[AdapterRegistry, ProvidersRuntime]:
     data = load_all_providers()
     registry = AdapterRegistry()
     client = httpx.AsyncClient()
@@ -23,7 +119,8 @@ def _build_registry() -> tuple[AdapterRegistry, dict]:
 
     return registry, data
 
-def _build_routing_engine() -> tuple[RoutingEngine, dict]:
+
+def _build_routing_engine() -> tuple[RoutingEngine, ProvidersRuntime]:
     data = load_all_providers()
     engine = RoutingEngine()
 
@@ -40,8 +137,8 @@ def _build_routing_engine() -> tuple[RoutingEngine, dict]:
 
     return engine, data
 
-class TestIntegration:
 
+class TestIntegration:
     def test_providers_loaded(self):
         registry, _data = _build_registry()
         providers = registry.list_providers()
@@ -76,20 +173,13 @@ class TestIntegration:
         for provider_id, provider_data in data.get("providers", {}).items():
             adapter = registry.get(provider_id)
             assert adapter is not None
-            expected_enabled = {
-                m["id"]
-                for m in provider_data.get("models", [])
-                if m.get("enabled", True)
-            }
+            expected_enabled = {m["id"] for m in provider_data.get("models", []) if m.get("enabled", True)}
             assert set(adapter.available_models) == expected_enabled
 
     def test_routing_engine_route_count(self):
         engine, data = _build_routing_engine()
         expected_count = sum(
-            1
-            for pd in data.get("providers", {}).values()
-            for m in pd.get("models", [])
-            if m.get("enabled", True)
+            1 for pd in data.get("providers", {}).values() for m in pd.get("models", []) if m.get("enabled", True)
         )
         assert engine.route_count == expected_count
 
@@ -143,6 +233,4 @@ class TestIntegration:
         for provider_id in registry.list_providers():
             adapter = registry.get(provider_id)
             assert adapter is not None
-            assert len(adapter.available_models) > 0, (
-                f"Provider {provider_id} has no enabled models"
-            )
+            assert len(adapter.available_models) > 0, f"Provider {provider_id} has no enabled models"

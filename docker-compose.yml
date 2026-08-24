@@ -7,17 +7,19 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - SPARROW_HOST=0.0.0.0
-      - SPARROW_PORT=8080
-      - SPARROW_ROUTING=fair
-      - WARP_HEALTH_INTERVAL=60
-      - WARP_CONNECT_TIMEOUT=10
-      - WARP_READ_TIMEOUT=120
+      SPARROW_HOST: 0.0.0.0
+      SPARROW_PORT: "8080"
+      SPARROW_ROUTING: fair
+      SPARROW_CONFIG_FILE: /app/providers.json
+      SPARROW_API_KEY: "${SPARROW_API_KEY:?SPARROW_API_KEY must be set}"
+      WARP_HEALTH_INTERVAL: "60"
+      WARP_CONNECT_TIMEOUT: "10"
+      WARP_READ_TIMEOUT: "120"
     depends_on:
       warp:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/readyz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -26,7 +28,7 @@ services:
       - sparrow-net
 
   warp:
-    image: dublok/cloudflare-warp:latest
+    image: dublok/cloudflare-warp:v1.0.76@sha256:2202c80915e85599b076bc9916a590a2a977a12057e2626d228c36be951436b6
     container_name: sparrow_warp
     restart: unless-stopped
     environment:

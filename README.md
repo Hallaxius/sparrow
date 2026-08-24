@@ -1,6 +1,6 @@
 # @hallaxius/sparrow
 
-**OpenAI-compatible router for keyless free LLM providers — automatic failover, API key management, rate limiting, response caching, and IP rotation via Cloudflare WARP. No upstream API keys required.**
+**OpenAI-compatible router for keyless free LLM providers — automatic failover, API key management, response caching, and IP rotation via Cloudflare WARP. No upstream API keys required.**
 
 <p align="center">
   <a href="https://github.com/hallaxius/sparrow"><img src="https://img.shields.io/badge/Python-%E2%89%A53.12-3776AB?logo=python&logoColor=white" alt="Python"></a>
@@ -20,7 +20,7 @@
 - [Quick Start](#quick-start)
 - [API Reference](#api-reference)
 - [Configuration](#configuration)
-- [providers.toml](#providerstoml)
+- [providers.json + models.json](#providersjson--modelsjson)
 - [Architecture](#architecture)
 - [Routing Modes](#routing-modes)
 - [Testing](#testing)
@@ -31,7 +31,7 @@
 
 ## Overview
 
-SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible API. Point any OpenAI SDK or client at SparroW and get automatic failover across **6 providers** — models are fetched dynamically via `sparrow init` — no API keys to the upstream providers required.
+SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible API. Point any OpenAI SDK or client at SparroW and get automatic failover across **7 providers** configured in `providers.json` and `models.json` — no API keys to the upstream providers required.
 
 **Key Philosophy:**
 
@@ -52,20 +52,19 @@ SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible
 - ✅ **Embeddings** — `/v1/embeddings` endpoint
 - ✅ **Model Listing** — `/v1/models` returns all available models
 - ✅ **Provider Listing** — `/v1/providers` with health status
-- ✅ **Health Check** — `/healthz` with uptime, route count, WARP status
+- ✅ **Health Check** — `/healthz` liveness and `/readyz` readiness with route and WARP status
 
 ### Routing
 
 - ✅ **Automatic Failover** — tries next provider on timeout or HTTP error
 - ✅ **Model Aliases** — request `gpt-4o`, get routed to the best free equivalent
-- ✅ **Routing Modes** — `fair` (round-robin), `fast` (lowest latency), `quality` (highest score)
+- ✅ **Routing Modes** — `fair`, `fast`, `quality`, and `model` selection
 - ✅ **Health Tracking** — circuit breaker prevents repeated calls to failing providers
 - ✅ **Daily Quotas** — per-provider daily request limits
 
 ### Security
 
-- ✅ **API Key Auth** — `.env`-backed static API keys, validated from request body or auth header
-- ✅ **Rate Limiting** — IP-based request limits with configurable windows
+- ✅ **API Key Auth** — `.env`-backed static API keys, accepted through `Authorization: Bearer` or `X-API-Key`
 
 ### Infrastructure
 
@@ -80,14 +79,13 @@ SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible
 
 | Provider | Quality Range | Notes |
 |---|---|---|
-| **OVHcloud** | 5–8 | Models fetched dynamically |
-| **Kilo Gateway** | 6–9 | Models fetched dynamically |
-| **OpenCode Zen** | 7–8 | Models fetched dynamically |
-| **LLM7** | 6 | Models fetched dynamically |
-| **BlockRun** | 6–8 | Models fetched dynamically |
-| **Algoholia** | 5 | Models fetched dynamically |
-
-> 💡 Run `uv run python -m sparrow init` to fetch all available models from each provider.
+| **GPT.chat** | 5 | |
+| **OpenCode Zen** | 5 | |
+| **BlockRun** | 5 | |
+| **Kilo Gateway** | 5 | |
+| **OVH Cloud** | 5 | |
+| **Codex.chat** | 5 | |
+| **LLM7.io** | 5 | |
 
 ---
 
@@ -121,8 +119,9 @@ docker compose up -d --build
 ### Local development
 
 ```bash
-pip install uv
 uv sync
+cp .env.example .env
+# Set SPARROW_API_KEY in .env before starting the server.
 uv run python -m sparrow
 ```
 
@@ -136,55 +135,47 @@ uv run python -m sparrow
 
 ## Quick Start
 
-### 1. Initialize providers (required on first run)
+### 1. Prepare configuration and credentials
 
 ```bash
-uv run python -m sparrow init
+cp .env.example .env
+# Set SPARROW_API_KEY to a long random secret.
 ```
 
-This fetches the latest models from all configured providers and generates `providers.toml`.
+Sparrow starts from the canonical `providers.json` and `models.json` in the repository. Set `SPARROW_CONFIG_FILE` when you need to run with another validated JSON file. `sparrow init` is an explicit refresh command and is never run automatically by the server or entrypoint.
 
-### 2. Start the proxy
+### 2. Verify provider configuration
+
+```bash
+uv run python -c "from sparrow.config.loader import load_all_providers; print(len(load_all_providers()['providers']))"
+```
+
+### 3. Start the proxy and router
 
 ```bash
 docker compose up -d --build
 ```
 
-### 3. Configure your API key
-
-```bash
-cp .env.example .env
-# Edit .env and set SPARROW_API_KEY to your chosen key
-```
-
-### 4. Make a request
+### 4. Make an authenticated request
 
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR-KEY" \
   -d '{
     "model": "auto",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "api_key": "YOUR-KEY"
+    "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
 
-### 5. Verify it works
+### 5. Verify liveness and readiness
 
 ```bash
-curl http://localhost:8080/healthz
+curl -i http://localhost:8080/healthz
+curl -i http://localhost:8080/readyz
 ```
 
-```json
-{
-  "status": "ok",
-  "uptime_seconds": 5,
-  "total_routes": 26,
-  "providers": 6,
-  "warp_enabled": true,
-  "warp_healthy": true
-}
-```
+`/healthz` is a public liveness endpoint and remains `200` while the process is running. `/readyz` is a public readiness endpoint: it returns `503` before startup completes, when no route is eligible, or when required WARP is unavailable; it returns `200` only when local components and at least one route are ready.
 
 ---
 
@@ -213,11 +204,11 @@ All endpoints follow the OpenAI API format.
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR-KEY" \
   -d '{
     "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Write a haiku"}],
-    "stream": true,
-    "api_key": "YOUR-KEY"
+    "stream": true
   }'
 ```
 
@@ -248,14 +239,18 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 
 ### API Key Authentication
 
-API keys are configured via the `SPARROW_API_KEY` environment variable (see Configuration). Include the key as `api_key` in the JSON request body, or via the `Authorization: Bearer` / `X-API-Key` header.
+API keys are configured via the required `SPARROW_API_KEY` environment variable (see Configuration). Send the key in the `Authorization: Bearer YOUR-KEY` header. `X-API-Key: YOUR-KEY` is supported for compatibility. API keys in JSON request bodies are not accepted.
+
+`/`, `/healthz`, and `/readyz` are public. Chat, embeddings, model/provider inventory, statistics, and metrics endpoints require authentication. The dashboard shell is public, but its data requests send the configured authorization header.
 
 ### Health & Stats
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/healthz` | Health check (no auth required) |
-| GET | `/stats` | Request statistics |
+| GET | `/healthz` | Liveness check (no auth required) |
+| GET | `/readyz` | Readiness check (no auth required; `503` when unavailable) |
+| GET | `/stats` | Request statistics (auth required) |
+| GET | `/metrics` | Prometheus metrics (auth required) |
 
 ### Response Headers
 
@@ -276,31 +271,59 @@ Every response includes provider metadata:
 |---|---|---|
 | `SPARROW_HOST` | `0.0.0.0` | Bind address |
 | `SPARROW_PORT` | `8080` | Listen port |
-| `SPARROW_ROUTING` | `fair` | Routing mode (`fair`, `fast`, `quality`) |
-| `SPARROW_API_KEY` | *(empty)* | Comma-separated user-chosen API keys; validated from request body `api_key` field or auth header |
-| `SPARROW_WARP_ENABLED` | `false` | Enable WARP proxy |
+| `SPARROW_ROUTING` | `fair` | Routing mode (`fair`, `fast`, `quality`, `model`) |
+| `SPARROW_API_KEY` | *(required)* | Single API key accepted through `Authorization: Bearer` or `X-API-Key` |
+| `SPARROW_CONFIG_FILE` | `providers.json` | JSON provider/model configuration file |
 | `SPARROW_WARP_URL` | `socks5://warp:1080` | WARP SOCKS5 proxy URL |
+| `SPARROW_WARP_HTTP_URL` | *(empty)* | Optional HTTP proxy URL for WARP health traffic |
+| `SPARROW_WARP_HEALTH_CHECK_URL` | `https://cloudflare.com/cdn-cgi/trace` | WARP health endpoint |
 | `WARP_HEALTH_INTERVAL` | `60` | WARP health check interval (seconds) |
 | `WARP_CONNECT_TIMEOUT` | `10` | WARP connection timeout (seconds) |
 | `WARP_READ_TIMEOUT` | `120` | WARP read timeout (seconds) |
+| `WARP_MAX_CONNECTIONS` | `100` | Maximum WARP connections |
+| `WARP_MAX_KEEPALIVE` | `20` | Maximum WARP keepalive connections |
+| `SPARROW_CACHE_ENABLED` | `false` | Enable deterministic non-streaming chat cache |
+
+Boolean settings accept `true`, `false`, `1`, `0`, `yes`, and `no`.
 
 ---
 
-## providers.toml
+## providers.json + models.json
 
-Providers and models are configured in `providers.toml`. This file is **generated by `sparrow init`** and should not be edited manually. Run `sparrow init` to fetch the latest models from all providers and create/update this file.
+Providers and models are configured in two JSON files. `providers.json` contains provider metadata and aliases, while `models.json` contains model definitions grouped by provider UUID. Sparrow reads these as the runtime provider/model source. Set `SPARROW_CONFIG_FILE` to point at another JSON file for tests or alternate deployments.
 
-### Provider entry
+### Provider entry (providers.json)
 
-```toml
-[providers.my-provider]
-name = "My Provider"
-base_url = "https://api.example.com/v1"
-adapter = "openai"
-auth = "none"
-models = [
-    { id = "model-id", name = "Model Name", context = 128000, quality = 5, enabled = true },
-]
+```json
+{
+  "providers": {
+    "my-provider-uuid": {
+      "name": "My Provider",
+      "base_url": "https://api.example.com/v1",
+      "adapter": "openai",
+      "auth": "none"
+    }
+  },
+  "aliases": {
+    "gpt-4o": "my-provider-uuid/model-id"
+  }
+}
+```
+
+### Model entry (models.json)
+
+```json
+{
+  "my-provider-uuid": [
+    {
+      "id": "model-id",
+      "name": "Model Name",
+      "context": 128000,
+      "quality": 5,
+      "enabled": true
+    }
+  ]
+}
 ```
 
 ### Model fields
@@ -313,13 +336,11 @@ models = [
 | `quality` | int | Quality score 1–10 (higher = better) |
 | `enabled` | bool | Whether the model is active |
 
+`daily_quota` is an optional provider-level daily request limit. It is enforced atomically for every dispatched upstream attempt; `None` means unlimited.
+
 ### Aliases
 
-```toml
-[aliases]
-"gpt-4o" = "kilo/nvidia/nemotron-3-super-120b-a12b:free"
-"auto" = "fair"
-```
+Aliases are defined in `providers.json` under the `"aliases"` key. The format is `"alias_name": "provider_uuid/model_id"`.
 
 ---
 
@@ -340,27 +361,27 @@ sparrow/
 │   │   ├── openai_compat.py # OpenAI-compatible adapter implementation
 │   │   └── registry.py     # Adapter registry (provider_id → adapter)
 │   ├── config/
-│   │   ├── loader.py       # TOML config loader
+│   │   ├── loader.py       # JSON config loader
 │   │   ├── aliases.py      # Model alias resolver
 │   │   └── models.py       # Pydantic settings model
 │   ├── middleware/
-│   │   ├── auth.py         # API key auth + rate limiting middleware
+│   │   ├── auth.py         # API key auth middleware
 │   │   ├── logging.py      # Request logging
-│   │   └── rate_limit.py   # IP-based rate limiter
+│   │   └── body_limit.py   # Body size limiter
 │   ├── models/
 │   │   ├── chat.py         # Chat completion request/response models
 │   │   ├── embedding.py    # Embedding request/response models
 │   │   ├── provider.py     # Provider/model info models
 │   │   └── config.py       # Provider config models
 │   └── routing/
-│       ├── engine.py       # Routing engine (fair/fast/quality modes)
+│       ├── engine.py       # Routing engine (fair/fast/quality/model modes)
 │       ├── health.py       # Circuit breaker + health tracking
 │       ├── modes.py        # Routing strategy functions
 │       └── quota.py        # Daily quota tracker
-├── tests/                  # 92 tests (pytest + pytest-asyncio)
-├── scripts/
-│   └── init.sh             # Startup script
-├── providers.toml          # **Generated by `sparrow init`** (Provider/model configuration)
+├── tests/                  # Tests (pytest + pytest-asyncio)
+├── entrypoint.sh           # Explicit JSON/API-key startup checks
+├── providers.json          # Provider metadata + aliases configuration
+├── models.json             # Model definitions per provider
 ├── docker-compose.yml      # Docker Compose (sparrow + WARP)
 ├── Dockerfile              # Python 3.12-slim + uv
 ├── pyproject.toml          # Project metadata + dev tools
@@ -371,13 +392,16 @@ sparrow/
 
 ```
 Client → AuthMiddleware → chat_completions()
+  → Validate request and reject malformed input with safe 400
   → AliasResolver.resolve(model)
-  → RoutingEngine.get_candidates(model)
-  → For each candidate route:
+  → RoutingEngine.ordered_candidates(model)
+  → For each candidate attempt within the global deadline:
+      → QuotaTracker.try_acquire() and CircuitBreaker
       → AdapterRegistry.get(provider_id)
       → adapter.chat_completion() / chat_completion_stream()
       → On success: return response
-      → On failure: log, try next route
+      → On retryable failure: bounded retry or next route
+      → On non-retryable upstream failure: next route
   → If all fail: return 503
 ```
 
@@ -387,9 +411,24 @@ Client → AuthMiddleware → chat_completions()
 
 | Mode | Behavior |
 |---|---|
-| `fair` | Round-robin across all healthy routes |
+| `fair` | Round-robin across eligible routes for the requested model |
 | `fast` | Pick the route with lowest average latency |
 | `quality` | Pick the route with highest quality score |
+| `model` | Preserve the configured candidate order for an explicit model |
+
+The request model `auto` means all eligible models. The request model `fair` is an ordinary model identifier; it is not an alias for `auto`.
+
+### Retry, quota, and SSE contracts
+
+Each request has at most four dispatched attempts and at most two attempts on one route. HTTP `408`, `429`, `5xx`, transport errors, and timeouts are retryable; `Retry-After` is honored only within the total request deadline. Other upstream `4xx` responses advance to the next route without repeating the same route. Local validation errors are never retried. Timeout exhaustion returns `504`; other provider exhaustion returns `503`.
+
+Streaming may retry or fail over before the first event. After the first event, the active route is retained: a failure emits one `upstream_error` event, closes the stream, and never emits a later `DONE` or switches providers.
+
+Daily quota acquisition, request statistics, and breaker state are updated for every dispatched attempt. Circuit breakers allow exactly one half-open probe after recovery.
+
+### Cache contracts
+
+The in-memory cache is disabled by default and is used only for deterministic, non-streaming chat requests without tools, tool choice, or response format. Cache keys include normalized request data, provider/model, and authenticated scope. Embeddings, streaming, errors, and non-deterministic requests bypass the cache.
 
 ---
 
@@ -412,6 +451,15 @@ uv run ruff format sparrow/ tests/
 uv run mypy sparrow/
 ```
 
+### Full verification
+
+```bash
+uv run ruff check sparrow/ tests/
+uv run mypy sparrow/
+uv run pytest tests/ -v
+uv run python -m compileall -q sparrow tests
+```
+
 ---
 
 ## Deployment
@@ -419,24 +467,32 @@ uv run mypy sparrow/
 ### Docker Compose
 
 ```bash
+cp .env.example .env
+# Set SPARROW_API_KEY before starting Compose.
+docker compose config --quiet
 docker compose up -d --build
 ```
 
-This starts both SparroW and the WARP proxy container. WARP takes ~60–90 seconds to connect on first boot.
+This starts both SparroW and the WARP proxy container. Compose enables WARP explicitly and waits for the WARP service healthcheck. WARP takes ~60–90 seconds to connect on first boot; SparroW remains not ready while required WARP is unavailable.
 
 ### Local
 
 ```bash
+cp .env.example .env
+# Set SPARROW_API_KEY before starting.
 uv run python -m sparrow
 ```
 
-Note: WARP proxy is not available in local mode unless you have a SOCKS5 proxy running.
+Local mode uses direct HTTP when WARP is unreachable. When a configured SOCKS5/SOCKS5H proxy is available, WARP is used automatically.
 
 ### Health Check
 
 ```bash
 curl http://localhost:8080/healthz
+curl -i http://localhost:8080/readyz
 ```
+
+`/healthz` is liveness and does not require authentication. `/readyz` is readiness and returns `503` until startup, routes, and required WARP are ready.
 
 ---
 

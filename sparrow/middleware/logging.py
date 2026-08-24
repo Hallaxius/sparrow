@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 def generate_request_id() -> str:
     return uuid.uuid4().hex[:12]
 
-class StructuredLogger:
 
+class StructuredLogger:
     def __init__(self, name: str = "sparrow") -> None:
         self._logger = logging.getLogger(name)
 
@@ -60,5 +60,6 @@ class StructuredLogger:
         if provider:
             entry["provider"] = provider
         self._logger.error(json.dumps(entry))
+
 
 RequestLogger = StructuredLogger

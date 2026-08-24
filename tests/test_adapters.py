@@ -3,7 +3,9 @@ import pytest
 
 from sparrow.adapters.openai_compat import OpenAICompatAdapter
 from sparrow.adapters.registry import AdapterRegistry
-from sparrow.middleware.auth import APIKeyAuth, _generate_api_key
+from sparrow.errors import UpstreamResponseError
+from sparrow.middleware.auth import APIKeyAuth
+from sparrow.models import ChatMessage, ChatRequest, EmbeddingRequest
 
 
 class TestAdapterRegistry:
@@ -49,17 +51,6 @@ class TestAdapterRegistry:
             registry.register("p1", "P1", "https://api.p1.com", [])
 
 
-class TestGenerateAPIKey:
-    def test_format(self):
-        key = _generate_api_key()
-        assert key.startswith("sk-")
-        assert len(key) == 51
-
-    def test_uniqueness(self):
-        keys = {_generate_api_key() for _ in range(100)}
-        assert len(keys) == 100
-
-
 class TestAPIKeyAuth:
     def test_valid_key(self):
         auth = APIKeyAuth(key="key-1")
@@ -83,3 +74,73 @@ class TestAPIKeyAuth:
         auth.set_keys("new-key")
         assert auth.is_valid("old-key") is False
         assert auth.is_valid("new-key") is True
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_rejects_empty_choices_as_upstream_error():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    request = ChatRequest(model="model-1", messages=[ChatMessage(role="user", content="hello")])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = OpenAICompatAdapter(
+            provider_id="provider-1",
+            provider_name="Provider 1",
+            base_url="https://api.test.com/v1",
+            models=[{"id": "model-1", "name": "Model 1", "enabled": True}],
+            client=client,
+        )
+
+        with pytest.raises(UpstreamResponseError):
+            await adapter.chat_completion(request, "model-1")
+
+
+@pytest.mark.asyncio
+async def test_embedding_rejects_incomplete_data_as_upstream_error():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"embedding": "invalid"}]})
+
+    request = EmbeddingRequest(model="model-1", input="hello")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = OpenAICompatAdapter(
+            provider_id="provider-1",
+            provider_name="Provider 1",
+            base_url="https://api.test.com/v1",
+            models=[{"id": "model-1", "name": "Model 1", "enabled": True}],
+            client=client,
+        )
+
+        with pytest.raises(UpstreamResponseError):
+            await adapter.embedding(request, "model-1")
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_stream_parses_sse_variants_and_closes_response():
+    stream_state = {"closed": False}
+
+    class TrackingStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b": keepalive\r\n\r\n"
+            yield b'data:{"id":"first"}\r\n\r\n'
+            yield b'data: \t{"usage":{"total_tokens":1}}\r\n\r\n'
+            yield b"data:   [DONE]\r\n\r\n"
+
+        async def aclose(self):
+            stream_state["closed"] = True
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=TrackingStream(), request=request)
+
+    request = ChatRequest(model="model-1", messages=[ChatMessage(role="user", content="hello")], stream=True)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = OpenAICompatAdapter(
+            provider_id="provider-1",
+            provider_name="Provider 1",
+            base_url="https://api.test.com/v1",
+            models=[{"id": "model-1", "name": "Model 1", "enabled": True}],
+            client=client,
+        )
+        chunks = [chunk async for chunk in adapter.chat_completion_stream(request, "model-1")]
+
+    assert chunks == ['{"id":"first"}', '\t{"usage":{"total_tokens":1}}']
+    assert stream_state["closed"] is True

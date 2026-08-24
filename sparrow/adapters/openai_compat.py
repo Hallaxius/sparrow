@@ -3,22 +3,19 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
 
 import httpx
 from fake_useragent import UserAgent
+from pydantic import ValidationError
 
+from sparrow.errors import UpstreamResponseError
 from sparrow.models import (
-    ChatChoice,
-    ChatMessage,
     ChatRequest,
     ChatResponse,
-    EmbeddingData,
     EmbeddingRequest,
     EmbeddingResponse,
-    EmbeddingUsage,
-    Usage,
 )
+from sparrow.models.config import ProviderModelRuntime
 
 _GPT_CHAT_HEADERS: dict[str, str] = {
     "Referer": "https://gpt.chat/",
@@ -32,13 +29,12 @@ _CODEX_CHAT_HEADERS: dict[str, str] = {
 
 
 class OpenAICompatAdapter:
-
     def __init__(
         self,
         provider_id: str,
         provider_name: str,
         base_url: str,
-        models: list[dict[str, Any]],
+        models: list[ProviderModelRuntime],
         client: httpx.AsyncClient,
     ) -> None:
         self._id = provider_id
@@ -78,35 +74,39 @@ class OpenAICompatAdapter:
     def is_available(self) -> bool:
         return len(self.available_models) > 0
 
-    async def chat_completion(
-        self, request: ChatRequest, model: str, **kwargs: object
-    ) -> ChatResponse:
+    async def chat_completion(self, request: ChatRequest, model: str, **kwargs: object) -> ChatResponse:
         url = f"{self._base_url}{self._chat_path}"
         payload = request.model_dump(exclude_none=True)
         payload["model"] = model
 
         response = await self._client.post(url, json=payload, headers=self._build_headers())
         response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except (TypeError, ValueError) as exc:
+            raise UpstreamResponseError(self._id, "chat") from exc
 
-        return ChatResponse(
-            id=data.get("id", f"chatcmpl-{uuid.uuid4().hex[:12]}"),
-            created=data.get("created", int(time.time())),
-            model=data.get("model", model),
-            choices=[
-                ChatChoice(
-                    index=c.get("index", 0),
-                    message=ChatMessage(**c["message"]),
-                    finish_reason=c.get("finish_reason"),
-                )
-                for c in data.get("choices", [])
-            ],
-            usage=Usage(**(data.get("usage") or {})),
-        )
+        if not isinstance(data, dict):
+            raise UpstreamResponseError(self._id, "chat")
 
-    async def chat_completion_stream(
-        self, request: ChatRequest, model: str, **kwargs: object
-    ) -> AsyncIterator[str]:
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise UpstreamResponseError(self._id, "chat")
+
+        try:
+            return ChatResponse.model_validate(
+                {
+                    "id": data.get("id") or f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                    "created": data.get("created") or int(time.time()),
+                    "model": data.get("model") or model,
+                    "choices": choices,
+                    "usage": data.get("usage") or {},
+                }
+            )
+        except ValidationError as exc:
+            raise UpstreamResponseError(self._id, "chat") from exc
+
+    async def chat_completion_stream(self, request: ChatRequest, model: str, **kwargs: object) -> AsyncIterator[str]:
         url = f"{self._base_url}{self._chat_path}"
         payload = request.model_dump(exclude_none=True)
         payload["model"] = model
@@ -114,16 +114,31 @@ class OpenAICompatAdapter:
 
         async with self._client.stream("POST", url, json=payload, headers=self._build_headers()) as response:
             response.raise_for_status()
+            data_lines: list[str] = []
             async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data_str = line[len("data: "):]
+                if line == "":
+                    if not data_lines:
+                        continue
+                    data_str = "\n".join(data_lines)
+                    data_lines = []
                     if data_str.strip() == "[DONE]":
                         return
                     yield data_str
+                    continue
+                if line.startswith(":"):
+                    continue
+                if line.startswith("data:"):
+                    data_str = line[5:]
+                    if data_str.startswith((" ", "\t")):
+                        data_str = data_str[1:]
+                    data_lines.append(data_str)
 
-    async def embedding(
-        self, request: EmbeddingRequest, model: str, **kwargs: object
-    ) -> EmbeddingResponse:
+            if data_lines:
+                data_str = "\n".join(data_lines)
+                if data_str.strip() != "[DONE]":
+                    yield data_str
+
+    async def embedding(self, request: EmbeddingRequest, model: str, **kwargs: object) -> EmbeddingResponse:
         url = f"{self._base_url}/embeddings"
         payload: dict[str, object] = {
             "model": model,
@@ -134,16 +149,26 @@ class OpenAICompatAdapter:
 
         response = await self._client.post(url, json=payload, headers=self._build_headers())
         response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except (TypeError, ValueError) as exc:
+            raise UpstreamResponseError(self._id, "embedding") from exc
 
-        return EmbeddingResponse(
-            data=[
-                EmbeddingData(
-                    embedding=e["embedding"],
-                    index=e.get("index", 0),
-                )
-                for e in data.get("data", [])
-            ],
-            model=data.get("model", model),
-            usage=EmbeddingUsage(**(data.get("usage") or {})),
-        )
+        if not isinstance(data, dict):
+            raise UpstreamResponseError(self._id, "embedding")
+
+        embeddings = data.get("data")
+        if not isinstance(embeddings, list) or not embeddings:
+            raise UpstreamResponseError(self._id, "embedding")
+
+        try:
+            return EmbeddingResponse.model_validate(
+                {
+                    "object": data.get("object") or "list",
+                    "data": embeddings,
+                    "model": data.get("model") or model,
+                    "usage": data.get("usage") or {},
+                }
+            )
+        except ValidationError as exc:
+            raise UpstreamResponseError(self._id, "embedding") from exc

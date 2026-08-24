@@ -3,19 +3,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from sparrow.proxy import WARPProxy
+from sparrow.config.loader import _load_json, _resolve_config_path, load_config
+from sparrow.config.models import Settings
+from sparrow.models.config import ProviderConfig, ProviderModelConfig, ProvidersConfig
+from sparrow.proxy import WARPConfig, WARPProxy
 
 logger = logging.getLogger("sparrow.init")
-
-PROJECT_ROOT = Path(__file__).parent.parent
-PROVIDERS_JSON_PATH = PROJECT_ROOT / "providers.json"
-MODELS_JSON_PATH = PROJECT_ROOT / "models.json"
 
 DEFAULT_QUALITY = 5
 DEFAULT_CONTEXT = 128000
@@ -24,16 +25,36 @@ DEFAULT_ENABLED = True
 MODELS_ENDPOINT = "/models"
 
 
-# Keywords to identify non-chat models (embeddings, TTS, image generation, etc.)
 NON_CHAT_KEYWORDS = [
-    "embedding", "embed", "tts", "text-to-speech", "speech", "audio",
-    "whisper", "transcribe", "translation", "vision", "image", "diffusion",
-    "stable-diffusion", "dalle", "midjourney", "moderation", "classifier",
-    "rerank", "bge-", "e5-", "gte-", "jina-", "nomic-", "mxbai-", "instructor-",
+    "embedding",
+    "embed",
+    "tts",
+    "text-to-speech",
+    "speech",
+    "audio",
+    "whisper",
+    "transcribe",
+    "translation",
+    "vision",
+    "image",
+    "diffusion",
+    "stable-diffusion",
+    "dalle",
+    "midjourney",
+    "moderation",
+    "classifier",
+    "rerank",
+    "bge-",
+    "e5-",
+    "gte-",
+    "jina-",
+    "nomic-",
+    "mxbai-",
+    "instructor-",
 ]
 
+
 def is_chat_model(model: dict[str, Any]) -> bool:
-    """Check if a model is likely a chat/completion model (not embedding, TTS, etc.)."""
     model_id = str(model.get("id", "")).lower()
     model_name = str(model.get("name", "")).lower()
     model_desc = str(model.get("description", "")).lower()
@@ -44,15 +65,12 @@ def is_chat_model(model: dict[str, Any]) -> bool:
         if keyword in text:
             return False
 
-    # Check capabilities if available and non-empty
     caps = model.get("capabilities")
     if isinstance(caps, list) and caps:
         chat_caps = {"chat", "completion", "text-generation", "conversation"}
         if not any(c in chat_caps for c in caps):
-            # Has capabilities but none are chat-related
             return False
 
-    # Check modalities at top level if present and non-empty
     modalities = model.get("modalities")
     if isinstance(modalities, dict) and modalities:
         input_mods = modalities.get("input", [])
@@ -62,7 +80,6 @@ def is_chat_model(model: dict[str, Any]) -> bool:
         if output_mods and "text" not in output_mods:
             return False
 
-    # Check architecture field (used by Kilo and others)
     arch = model.get("architecture")
     if isinstance(arch, dict) and arch:
         input_mods = arch.get("input_modalities", [])
@@ -129,7 +146,6 @@ def is_model_free(provider_id: str, model: dict[str, Any]) -> bool:
     return False
 
 
-
 async def fetch_models_from_provider(
     provider_id: str, base_url: str, client: httpx.AsyncClient
 ) -> list[dict[str, Any]]:
@@ -153,7 +169,6 @@ async def fetch_models_from_provider(
             )
             return []
 
-        # First pass: filter to chat models only (skip embeddings, TTS, image, etc.)
         candidate_models = []
         for m in models:
             if not isinstance(m, dict):
@@ -191,71 +206,102 @@ async def fetch_models_from_provider(
         return []
 
 
-def load_existing_providers() -> dict[str, Any]:
-    providers_list: list[dict[str, Any]] = []
-    models_list: list[dict[str, Any]] = []
+def load_existing_config() -> tuple[Settings, Path, ProvidersConfig]:
+    settings = load_config()
+    config_path = _resolve_config_path(settings)
+    return settings, config_path, _load_json(config_path)
 
-    if PROVIDERS_JSON_PATH.exists():
-        with open(PROVIDERS_JSON_PATH, encoding="utf-8") as f:
-            providers_list = json.load(f)
 
-    if MODELS_JSON_PATH.exists():
-        with open(MODELS_JSON_PATH, encoding="utf-8") as f:
-            models_list = json.load(f)
+def write_text_atomic(path: Path, content: str) -> None:
+    directory = path.parent
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=directory,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as temporary_file:
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+        if os.name == "posix":
+            directory_descriptor = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
-    providers_by_id = {p["id"]: p for p in providers_list if "id" in p}
-    models_by_provider: dict[str, list[dict[str, Any]]] = {}
-    for m in models_list:
-        pid = m.get("provider_id", "")
-        if pid not in models_by_provider:
-            models_by_provider[pid] = []
-        models_by_provider[pid].append(m)
 
-    result_providers: dict[str, Any] = {}
-    for pid, pdata in providers_by_id.items():
-        result_providers[pid] = {
-            "name": pdata.get("name", pid),
-            "base_url": pdata.get("base_url", ""),
-            "models": models_by_provider.get(pid, []),
+def providers_config_to_providers_json(config: ProvidersConfig) -> str:
+    providers_data: dict[str, dict[str, Any]] = {}
+    for provider_id, provider in config.providers.items():
+        entry: dict[str, Any] = {
+            "name": provider.name,
+            "base_url": provider.base_url,
+            "adapter": provider.adapter,
+            "auth": provider.auth,
         }
+        if provider.daily_quota is not None:
+            entry["daily_quota"] = provider.daily_quota
+        providers_data[provider_id] = entry
 
-    if result_providers:
-        return {"providers": result_providers}
+    output: dict[str, Any] = {
+        "providers": providers_data,
+        "aliases": dict(config.aliases),
+    }
+    return json.dumps(output, indent=2, ensure_ascii=False) + "\n"
 
-    return {}
+
+def providers_config_to_models_json(config: ProvidersConfig) -> str:
+    models_data: dict[str, list[dict[str, Any]]] = {}
+    for provider_id, provider in config.providers.items():
+        models_data[provider_id] = [
+            {
+                "id": model.id,
+                "name": model.name,
+                "context": model.context,
+                "quality": model.quality,
+                "enabled": model.enabled,
+            }
+            for model in provider.models
+        ]
+    return json.dumps(models_data, indent=2, ensure_ascii=False) + "\n"
+
+
+def write_providers_config(path: Path, config: ProvidersConfig) -> None:
+    write_text_atomic(path, providers_config_to_providers_json(config))
+    models_path = path.parent / "models.json"
+    write_text_atomic(models_path, providers_config_to_models_json(config))
 
 
 def merge_models(
-    existing_models: list[dict[str, Any]], fetched_models: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    existing_by_id = {m["id"]: m for m in existing_models if "id" in m}
-    fetched_by_id = {m["id"]: m for m in fetched_models if "id" in m}
+    existing_models: list[ProviderModelConfig], fetched_models: list[dict[str, Any]]
+) -> list[ProviderModelConfig]:
+    fetched_ids = [str(model["id"]) for model in fetched_models if "id" in model]
+    if not fetched_ids:
+        return existing_models
 
-    merged = []
+    existing_ids = {model.id for model in existing_models}
+    merged = list(existing_models)
 
-    for model_id, existing in existing_by_id.items():
-        if model_id in fetched_by_id:
-            merged_model = {
-                "id": model_id,
-                "name": existing.get("name", model_id),
-                "context": existing.get("context", DEFAULT_CONTEXT),
-                "quality": existing.get("quality", DEFAULT_QUALITY),
-                "enabled": existing.get("enabled", DEFAULT_ENABLED),
-            }
-            merged.append(merged_model)
-        else:
-            pass
-
-    for model_id, _fetched in fetched_by_id.items():
-        if model_id not in existing_by_id:
-            merged_model = {
-                "id": model_id,
-                "name": model_id,
-                "context": DEFAULT_CONTEXT,
-                "quality": DEFAULT_QUALITY,
-                "enabled": DEFAULT_ENABLED,
-            }
-            merged.append(merged_model)
+    for model_id in fetched_ids:
+        if model_id not in existing_ids:
+            merged.append(
+                ProviderModelConfig(
+                    id=model_id,
+                    name=model_id,
+                    context=DEFAULT_CONTEXT,
+                    quality=DEFAULT_QUALITY,
+                    enabled=DEFAULT_ENABLED,
+                )
+            )
+            existing_ids.add(model_id)
 
     return merged
 
@@ -266,83 +312,46 @@ async def run_init() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    providers_data = load_existing_providers()
-    providers = providers_data.get("providers", {})
+    settings, config_path, providers_config = load_existing_config()
+    providers = providers_config.providers
 
-    if not providers:
-        logger.info("No providers found, nothing to update")
-        return 0
-
-    warp = WARPProxy()
-    await warp.start()
-
-    if warp.is_warp_available():
-        logger.info("WARP proxy available, using proxy for model fetching")
+    warp = WARPProxy(WARPConfig.from_settings(settings))
+    try:
+        await warp.start()
         client = warp.get_client(use_proxy=True)
-    else:
-        logger.warning("WARP proxy not available, using direct connection for model fetching")
-        client = warp.get_client(use_proxy=False)
 
-    total_fetched = 0
-    total_merged = 0
+        total_fetched = 0
+        total_merged = 0
+        updated_providers: dict[str, ProviderConfig] = {}
 
-    for provider_id, provider_data in providers.items():
-        base_url = provider_data.get("base_url", "")
-        if not base_url:
-            logger.warning("Provider %s has no base_url, skipping", provider_id)
-            continue
+        for provider_id, provider in providers.items():
+            fetched_models = await fetch_models_from_provider(provider_id, provider.base_url, client)
+            merged_models = merge_models(provider.models, fetched_models)
+            updated_providers[provider_id] = provider.model_copy(update={"models": merged_models})
+            total_fetched += len(fetched_models)
+            total_merged += len(merged_models)
+            if fetched_models:
+                logger.info(
+                    "Provider %s: %d fetched, %d merged",
+                    provider_id,
+                    len(fetched_models),
+                    len(merged_models),
+                )
+            else:
+                logger.info(
+                    "Provider %s: no models fetched, keeping %d existing models", provider_id, len(merged_models)
+                )
 
-        existing_models = provider_data.get("models", [])
-        fetched_models = await fetch_models_from_provider(provider_id, base_url, client)
-
-        merged_models = merge_models(existing_models, fetched_models)
-        provider_data["models"] = merged_models
-        total_fetched += len(fetched_models)
-        total_merged += len(merged_models)
-        if fetched_models:
-            logger.info(
-                "Provider %s: %d fetched, %d merged",
-                provider_id,
-                len(fetched_models),
-                len(merged_models),
-            )
-        else:
-            logger.info("Provider %s: no free models fetched, filtered to %d models", provider_id, len(merged_models))
-
-    from datetime import UTC, datetime
-
-    now = datetime.now(UTC).isoformat()
-
-    providers_output = []
-    for pid, pdata in providers.items():
-        providers_output.append({
-            "id": pid,
-            "name": pdata.get("name", pid),
-            "base_url": pdata.get("base_url", ""),
-            "created_at": now,
-        })
-
-    models_output = []
-    for pid, pdata in providers.items():
-        for model in pdata.get("models", []):
-            models_output.append({
-                "id": model.get("id", ""),
-                "model": model.get("name", model.get("id", "")),
-                "slug": model.get("id", ""),
-                "provider_id": pid,
-                "response_time": 0.0,
-                "created_at": now,
-            })
-
-    with open(PROVIDERS_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(providers_output, f, indent=2, ensure_ascii=False)
-
-    with open(MODELS_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(models_output, f, indent=2, ensure_ascii=False)
+        updated_config = ProvidersConfig(providers=updated_providers, aliases=providers_config.aliases)
+        write_providers_config(config_path, updated_config)
+    finally:
+        await warp.stop()
 
     logger.info(
-        "Updated providers.json and models.json: %d providers, %d total models",
+        "Updated configuration %s: %d providers, %d fetched models, %d total models",
+        config_path,
         len(providers),
+        total_fetched,
         total_merged,
     )
     return 0

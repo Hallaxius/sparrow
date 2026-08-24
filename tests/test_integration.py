@@ -142,7 +142,7 @@ class TestIntegration:
     def test_providers_loaded(self):
         registry, _data = _build_registry()
         providers = registry.list_providers()
-        assert len(providers) == 7
+        assert len(providers) == 5
         providers_data = _data.get("providers", {})
         for pid in providers:
             assert pid in providers_data

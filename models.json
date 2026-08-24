@@ -1,8 +1,4 @@
 {
-  "0de24b8c-78c7-4714-a4a7-5e82ed198009": [
-    {"id": "openai/gpt-5-mini", "name": "GPT5 mini", "context": 128000, "quality": 5, "enabled": true},
-    {"id": "openai/gpt-4o-mini", "name": "GPT 4o mini", "context": 128000, "quality": 5, "enabled": true}
-  ],
   "1321946a-0d1a-4c00-882e-c626e19047e5": [
     {"id": "x-preview-f-free", "name": "Ox Alpha", "context": 128000, "quality": 5, "enabled": true},
     {"id": "nemotron-3-ultra-free", "name": "Nemotron 3 ultra", "context": 128000, "quality": 5, "enabled": true},
@@ -49,16 +45,12 @@
     {"id": "Mistral-Small-3.2-24B-Instruct-2506", "name": "Mistral Small 3.2 24B Instruct 2506", "context": 128000, "quality": 5, "enabled": true},
     {"id": "Qwen3.5-397B-A17B", "name": "Qwen3.5 397B", "context": 128000, "quality": 5, "enabled": true}
   ],
-  "d570f28d-96f7-481d-bde0-170e57fb1a06": [
-    {"id": "openai/gpt-4o", "name": "GPT 4o", "context": 128000, "quality": 5, "enabled": true}
-  ],
   "f3100559-d247-449a-baa1-5092dc4fcf6c": [
     {"id": "DeepSeek-V4-Flash-0731", "name": "DeepSeek V4 Flash 0731", "context": 128000, "quality": 5, "enabled": true},
     {"id": "gemini-3.1-flash-lite", "name": "Gemini 3.1 flash lite", "context": 128000, "quality": 5, "enabled": true},
     {"id": "minimax-m2.7", "name": "Minimax m2.7", "context": 128000, "quality": 5, "enabled": true},
     {"id": "meta-Llama-3.1-8B-Instruct-Turbo", "name": "Llama 3.1 8B Instruct Turbo", "context": 128000, "quality": 5, "enabled": true},
     {"id": "mistral-Nemo-Instruct-2407", "name": "Mistral Nemo Instruct 2407", "context": 128000, "quality": 5, "enabled": true},
-    {"id": "codestral-latest", "name": "Codestral", "context": 128000, "quality": 5, "enabled": true},
-    {"id": "gpt-oss:20b", "name": "GPT OSS 20B", "context": 128000, "quality": 5, "enabled": true}
+    {"id": "codestral-latest", "name": "Codestral", "context": 128000, "quality": 5, "enabled": true}
   ]
 }

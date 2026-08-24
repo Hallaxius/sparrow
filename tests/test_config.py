@@ -224,22 +224,18 @@ def test_load_all_providers_preserves_current_json_inventory():
     providers = data["providers"]
 
     assert sorted(providers) == [
-        "0de24b8c-78c7-4714-a4a7-5e82ed198009",
         "1321946a-0d1a-4c00-882e-c626e19047e5",
         "17b72315-1e87-4a43-b86d-e455bfe57051",
         "a16ce1ab-4e9d-446e-85ec-34974be6091a",
         "c193adf9-0783-40fa-a892-3ad8463a2fb6",
-        "d570f28d-96f7-481d-bde0-170e57fb1a06",
         "f3100559-d247-449a-baa1-5092dc4fcf6c",
     ]
     assert {provider_id: len(provider["models"]) for provider_id, provider in providers.items()} == {
-        "0de24b8c-78c7-4714-a4a7-5e82ed198009": 2,
         "1321946a-0d1a-4c00-882e-c626e19047e5": 5,
         "17b72315-1e87-4a43-b86d-e455bfe57051": 4,
         "a16ce1ab-4e9d-446e-85ec-34974be6091a": 16,
         "c193adf9-0783-40fa-a892-3ad8463a2fb6": 13,
-        "d570f28d-96f7-481d-bde0-170e57fb1a06": 1,
-        "f3100559-d247-449a-baa1-5092dc4fcf6c": 7,
+        "f3100559-d247-449a-baa1-5092dc4fcf6c": 6,
     }
     assert providers["a16ce1ab-4e9d-446e-85ec-34974be6091a"]["base_url"] == "https://api.kilo.ai/api/openrouter/"
     assert providers["a16ce1ab-4e9d-446e-85ec-34974be6091a"]["models"][0] == {

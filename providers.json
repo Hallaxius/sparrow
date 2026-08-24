@@ -1,11 +1,5 @@
 {
   "providers": {
-    "0de24b8c-78c7-4714-a4a7-5e82ed198009": {
-      "name": "GPT.chat",
-      "base_url": "https://gpt.chat",
-      "adapter": "openai",
-      "auth": "none"
-    },
     "1321946a-0d1a-4c00-882e-c626e19047e5": {
       "name": "Opencode Zen",
       "base_url": "https://opencode.ai/zen/v1",
@@ -27,12 +21,6 @@
     "c193adf9-0783-40fa-a892-3ad8463a2fb6": {
       "name": "OVH Cloud",
       "base_url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
-      "adapter": "openai",
-      "auth": "none"
-    },
-    "d570f28d-96f7-481d-bde0-170e57fb1a06": {
-      "name": "Codex.chat",
-      "base_url": "https://codex.chat",
       "adapter": "openai",
       "auth": "none"
     },

@@ -24,6 +24,17 @@ def _coerce_mode(mode: RoutingMode | str) -> RoutingMode:
         raise ValueError("expected one of: fair, fast, quality, model") from error
 
 
+def _build_related_models(model_groups: dict[str, list[str]]) -> dict[str, frozenset[str]]:
+    related: dict[str, set[str]] = {}
+    for members in model_groups.values():
+        group = {member for member in members if member}
+        if len(group) < 2:
+            continue
+        for member in group:
+            related.setdefault(member, set()).update(group)
+    return {member: frozenset(peers) for member, peers in related.items()}
+
+
 class Route:
     def __init__(
         self,
@@ -50,12 +61,14 @@ class RoutingEngine:
         health_tracker: RouteHealthTracker | None = None,
         quota: QuotaTracker | None = None,
         mode: RoutingMode | str = RoutingMode.FAIR,
+        model_groups: dict[str, list[str]] | None = None,
     ) -> None:
         self._routes: list[Route] = []
         self._rr_indices: dict[str, int] = {}
         self._health = health_tracker
         self._quota = quota
         self._mode = _coerce_mode(mode)
+        self._related_models = _build_related_models(model_groups or {})
 
     @property
     def route_count(self) -> int:
@@ -74,7 +87,14 @@ class RoutingEngine:
         max_tokens: int | None = None,
         provider_id: str | None = None,
     ) -> list[Route]:
-        candidates = list(self._routes) if model == "auto" else [r for r in self._routes if r.model_id == model]
+        if model == "auto":
+            candidates = list(self._routes)
+        else:
+            related = self._related_models.get(model)
+            if related is None:
+                candidates = [r for r in self._routes if r.model_id == model]
+            else:
+                candidates = [r for r in self._routes if r.model_id in related]
 
         if provider_id is not None:
             candidates = [route for route in candidates if route.provider_id == provider_id]

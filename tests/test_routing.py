@@ -94,3 +94,55 @@ def test_configured_routing_mode_orders_candidates():
     candidates = engine.ordered_candidates("shared")
 
     assert [route.provider_id for route in candidates] == ["best", "slow"]
+
+
+def test_model_group_expands_candidates_across_providers():
+    engine = RoutingEngine(model_groups={"hy3": ["hy3-free", "tencent/hy3:free"]})
+    engine.register_route(Route("zen", "hy3-free"))
+    engine.register_route(Route("kilo", "tencent/hy3:free"))
+    engine.register_route(Route("ovh", "unrelated"))
+
+    assert [(route.provider_id, route.model_id) for route in engine.get_candidates("tencent/hy3:free")] == [
+        ("zen", "hy3-free"),
+        ("kilo", "tencent/hy3:free"),
+    ]
+    assert [(route.provider_id, route.model_id) for route in engine.get_candidates("hy3-free")] == [
+        ("zen", "hy3-free"),
+        ("kilo", "tencent/hy3:free"),
+    ]
+    assert [route.provider_id for route in engine.get_candidates("unrelated")] == ["ovh"]
+
+
+def test_provider_pin_blocks_group_expansion():
+    engine = RoutingEngine(model_groups={"hy3": ["hy3-free", "tencent/hy3:free"]})
+    engine.register_route(Route("zen", "hy3-free"))
+    engine.register_route(Route("kilo", "tencent/hy3:free"))
+
+    candidates = engine.get_candidates("tencent/hy3:free", provider_id="kilo")
+
+    assert [route.provider_id for route in candidates] == ["kilo"]
+
+
+def test_model_group_respects_health_and_quota_filters():
+    from sparrow.routing.health import RouteHealthTracker
+
+    health = RouteHealthTracker()
+    engine = RoutingEngine(health_tracker=health, model_groups={"pair": ["a1", "b1"]})
+    engine.register_route(Route("p1", "a1"))
+    engine.register_route(Route("p2", "b1"))
+
+    health.get_breaker("p1:a1").record_failure()
+    health.get_breaker("p1:a1").record_failure()
+    health.get_breaker("p1:a1").record_failure()
+    health.get_breaker("p1:a1").record_failure()
+    health.get_breaker("p1:a1").record_failure()
+
+    assert [route.provider_id for route in engine.get_candidates("b1")] == ["p2"]
+
+
+def test_model_groups_without_engine_are_ignored():
+    engine = RoutingEngine()
+    engine.register_route(Route("zen", "hy3-free"))
+    engine.register_route(Route("kilo", "tencent/hy3:free"))
+
+    assert [route.provider_id for route in engine.get_candidates("hy3-free")] == ["zen"]

@@ -39,5 +39,17 @@
     "deepseek-r1": "f3100559-d247-449a-baa1-5092dc4fcf6c/DeepSeek-V4-Flash-0731",
     "gemini-2.5-flash": "f3100559-d247-449a-baa1-5092dc4fcf6c/gemini-3.1-flash-lite",
     "mistral-small": "c193adf9-0783-40fa-a892-3ad8463a2fb6/Mistral-Small-3.2-24B-Instruct-2506"
+  },
+  "model_groups": {
+    "hy3": ["hy3-free", "tencent/hy3:free"],
+    "nemotron-3-ultra": ["nemotron-3-ultra-free", "nvidia/nemotron-3-ultra-550b-a55b:free"],
+    "laguna-s-2.1": ["laguna-s-2.1-free", "poolside/laguna-s-2.1:free"],
+    "nemotron-3.5-lightning": ["nemotron-3.5-lightning-free", "nvidia/nemotron-3.5-lightning:free"],
+    "step-3.7-flash": ["nvidia/step-3.7-flash", "stepfun/step-3.7-flash:free"],
+    "nemotron-3-nano-omni-30b": [
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+    ],
+    "mistral-nemo-2407": ["Mistral-Nemo-Instruct-2407", "mistral-Nemo-Instruct-2407"]
   }
 }

@@ -27,6 +27,7 @@ class ProviderRuntime(TypedDict):
 class ProvidersRuntime(TypedDict):
     providers: dict[str, ProviderRuntime]
     aliases: dict[str, str]
+    model_groups: dict[str, list[str]]
 
 
 class ProviderModelConfig(BaseModel):
@@ -91,6 +92,7 @@ class ProvidersConfig(BaseModel):
 
     providers: dict[str, ProviderConfig]
     aliases: dict[str, str] = Field(default_factory=dict)
+    model_groups: dict[str, list[str]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_routes(self) -> ProvidersConfig:
@@ -113,10 +115,23 @@ class ProvidersConfig(BaseModel):
             if model_id not in model_ids:
                 message = f"alias {alias!r} targets unknown model {target!r}"
                 raise ValueError(message)
+        all_model_ids = {model.id for provider in self.providers.values() for model in provider.models}
+        for group_name, members in self.model_groups.items():
+            if not group_name.strip():
+                message = "model group name must be non-empty"
+                raise ValueError(message)
+            if len(set(members)) < 2:
+                message = f"model group {group_name!r} must contain at least two distinct models"
+                raise ValueError(message)
+            unknown = [member for member in members if member not in all_model_ids]
+            if unknown:
+                message = f"model group {group_name!r} references unknown models: {unknown}"
+                raise ValueError(message)
         return self
 
     def to_runtime(self) -> ProvidersRuntime:
         return {
             "providers": {provider_id: provider.to_runtime() for provider_id, provider in self.providers.items()},
             "aliases": dict(self.aliases),
+            "model_groups": {name: list(members) for name, members in self.model_groups.items()},
         }

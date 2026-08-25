@@ -82,11 +82,11 @@ async def _unreachable_warp() -> bool:
 async def test_lifespan_failure_closes_resources_and_clears_state(app, monkeypatch):
     captured: list[object] = []
 
-    def fail_loading() -> dict[str, object]:
+    async def fail_start(self: object) -> None:
         captured.append(app_module._client)
         raise ConfigurationFileError("providers.json", "startup failure")
 
-    monkeypatch.setattr(app_module, "load_all_providers", fail_loading)
+    monkeypatch.setattr(app_module.SparrowClient, "start", fail_start)
 
     with pytest.raises(ConfigurationFileError):
         async with lifespan(app):

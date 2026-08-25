@@ -364,10 +364,12 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         _quota = QuotaTracker()
         _health = RouteHealthTracker()
 
+        providers_data = load_all_providers()
         _routing_engine = RoutingEngine(
             health_tracker=_health,
             quota=_quota,
             mode=RoutingMode(settings.routing),
+            model_groups=providers_data.get("model_groups", {}),
         )
         warp = WARPProxy(WARPConfig.from_settings(settings))
         _client = SparrowClient(warp_proxy=warp)
@@ -376,7 +378,6 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         _adapter_registry = AdapterRegistry()
         _adapter_registry.set_client(_client.get_client(use_warp=True))
 
-        providers_data = load_all_providers()
         _alias_resolver = AliasResolver(
             aliases=providers_data.get("aliases", {}),
             provider_models={
@@ -796,7 +797,15 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
 async def stats_endpoint(request: Request) -> JSONResponse:
     if _stats is None:
         return JSONResponse({"error": "Stats not initialized"}, status_code=500)
-    return JSONResponse(_stats.get_summary())
+    summary = _stats.get_summary()
+    if _health is not None:
+        breakers = _health.get_summary()
+        summary["circuit_breakers"] = {
+            key: state for key, state in breakers.items() if state["state"] != "closed"
+        }
+        summary["circuit_breakers_open"] = sum(1 for s in breakers.values() if s["state"] == "open")
+        summary["circuit_breakers_half_open"] = sum(1 for s in breakers.values() if s["state"] == "half-open")
+    return JSONResponse(summary)
 
 
 async def embeddings(request: Request) -> JSONResponse:

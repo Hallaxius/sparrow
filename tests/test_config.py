@@ -9,9 +9,11 @@ from sparrow.errors import ConfigurationFileError
 from sparrow.routing.engine import Route, RoutingEngine
 
 
-def write_config(tmp_path, providers, aliases=None, models=None):
+def write_config(tmp_path, providers, aliases=None, models=None, model_groups=None):
     providers_file = tmp_path / "providers.json"
     providers_data = {"providers": providers, "aliases": aliases or {}}
+    if model_groups is not None:
+        providers_data["model_groups"] = model_groups
     providers_file.write_text(json.dumps(providers_data), encoding="utf-8")
 
     if models is None:
@@ -215,6 +217,54 @@ def test_load_all_providers_rejects_malformed_alias(tmp_path, monkeypatch):
     monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
 
     with pytest.raises(ConfigurationFileError, match="provider/model"):
+        load_all_providers()
+
+
+def test_load_all_providers_returns_model_groups(tmp_path, monkeypatch):
+    providers = {
+        "zen": {"name": "Zen", "base_url": "https://zen.example/v1"},
+        "kilo": {"name": "Kilo", "base_url": "https://kilo.example/v1"},
+    }
+    models = {
+        "zen": [{"id": "hy3-free", "name": "HY3", "enabled": True}],
+        "kilo": [{"id": "tencent/hy3:free", "name": "HY3", "enabled": True}],
+    }
+    model_groups = {"hy3": ["hy3-free", "tencent/hy3:free"]}
+    write_config(tmp_path, providers, models=models, model_groups=model_groups)
+    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+
+    data = load_all_providers()
+
+    assert data["model_groups"] == {"hy3": ["hy3-free", "tencent/hy3:free"]}
+
+
+def test_load_all_providers_rejects_group_with_unknown_model(tmp_path, monkeypatch):
+    providers = {
+        "alpha": {"name": "Alpha", "base_url": "https://alpha.example/v1"},
+    }
+    models = {
+        "alpha": [{"id": "alpha-fast", "name": "Alpha Fast", "enabled": True}],
+    }
+    model_groups = {"fast": ["alpha-fast", "ghost-model"]}
+    write_config(tmp_path, providers, models=models, model_groups=model_groups)
+    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+
+    with pytest.raises(ConfigurationFileError, match="unknown models"):
+        load_all_providers()
+
+
+def test_load_all_providers_rejects_single_member_group(tmp_path, monkeypatch):
+    providers = {
+        "alpha": {"name": "Alpha", "base_url": "https://alpha.example/v1"},
+    }
+    models = {
+        "alpha": [{"id": "alpha-fast", "name": "Alpha Fast", "enabled": True}],
+    }
+    model_groups = {"fast": ["alpha-fast"]}
+    write_config(tmp_path, providers, models=models, model_groups=model_groups)
+    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+
+    with pytest.raises(ConfigurationFileError, match="at least two"):
         load_all_providers()
 
 

@@ -278,6 +278,8 @@ def test_load_all_providers_preserves_current_json_inventory():
         "17b72315-1e87-4a43-b86d-e455bfe57051",
         "a16ce1ab-4e9d-446e-85ec-34974be6091a",
         "c193adf9-0783-40fa-a892-3ad8463a2fb6",
+        "c1d70340-1800-4faf-aecc-63480c0ef315",
+        "e142a874-b2b2-4b25-86b3-07834bee7126",
         "f3100559-d247-449a-baa1-5092dc4fcf6c",
     ]
     assert {provider_id: len(provider["models"]) for provider_id, provider in providers.items()} == {
@@ -285,8 +287,14 @@ def test_load_all_providers_preserves_current_json_inventory():
         "17b72315-1e87-4a43-b86d-e455bfe57051": 4,
         "a16ce1ab-4e9d-446e-85ec-34974be6091a": 16,
         "c193adf9-0783-40fa-a892-3ad8463a2fb6": 13,
+        "c1d70340-1800-4faf-aecc-63480c0ef315": 1,
+        "e142a874-b2b2-4b25-86b3-07834bee7126": 11,
         "f3100559-d247-449a-baa1-5092dc4fcf6c": 6,
     }
+    assert providers["c1d70340-1800-4faf-aecc-63480c0ef315"]["base_url"] == "https://free.empero.org/v1"
+    assert providers["c1d70340-1800-4faf-aecc-63480c0ef315"]["api_keys"] == ["free"]
+    assert providers["e142a874-b2b2-4b25-86b3-07834bee7126"]["base_url"] == "https://integrate.api.nvidia.com/v1"
+    assert providers["e142a874-b2b2-4b25-86b3-07834bee7126"]["api_keys"] == ["replace-with-key"]
     assert providers["a16ce1ab-4e9d-446e-85ec-34974be6091a"]["base_url"] == "https://api.kilo.ai/api/openrouter/"
     assert providers["a16ce1ab-4e9d-446e-85ec-34974be6091a"]["models"][0] == {
         "id": "tencent/hy3:free",

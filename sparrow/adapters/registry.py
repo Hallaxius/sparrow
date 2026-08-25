@@ -24,6 +24,8 @@ class AdapterRegistry:
         provider_name: str,
         base_url: str,
         models: list[ProviderModelRuntime],
+        api_key: str | None = None,
+        api_keys: list[str] | None = None,
     ) -> ProviderAdapter:
         if self._client is None:
             raise RuntimeError("AdapterRegistry client not initialized. Call set_client() first.")
@@ -36,6 +38,8 @@ class AdapterRegistry:
             base_url=base_url,
             models=models,
             client=self._client,
+            api_key=api_key,
+            api_keys=api_keys,
         )
         self._adapters[provider_id] = adapter
         logger.info("Registered adapter: %s (%s)", provider_id, base_url)

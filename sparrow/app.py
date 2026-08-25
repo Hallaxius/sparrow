@@ -51,6 +51,7 @@ from sparrow.routing.engine import Route as RoutingRoute
 from sparrow.routing.engine import RoutingEngine, RoutingMode
 from sparrow.routing.health import CircuitBreaker, RouteHealthTracker
 from sparrow.routing.quota import QuotaTracker
+from sparrow.routing.rpm import RpmGovernor
 from sparrow.stats import StatsTracker
 
 logger = logging.getLogger("sparrow")
@@ -83,6 +84,7 @@ _stats: StatsTracker | None = None
 _adapter_registry: AdapterRegistry | None = None
 _cache: ResponseCache | None = None
 _quota: QuotaTracker | None = None
+_rpm_governor: RpmGovernor | None = None
 _health: RouteHealthTracker | None = None
 _structured_logger: StructuredLogger | None = None
 _capability_scorer: CapabilityScorer | None = None
@@ -345,7 +347,9 @@ def _record_attempt(
         else:
             breaker.record_failure()
     if error is not None and _routing_engine is not None:
-        _routing_engine.record_context_overflow(route.provider_id, route.model_id, str(error), max_tokens)
+        _routing_engine.record_context_overflow(
+            route.provider_id, route.model_id, str(error), max_tokens, route.context_window
+        )
     return latency_ms
 
 
@@ -385,6 +389,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         _context_learner, \
         _mcp_server, \
         _plugin_registry, \
+        _rpm_governor, \
         _readiness
 
     _client = None
@@ -394,6 +399,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
     _adapter_registry = None
     _cache = None
     _quota = None
+    _rpm_governor = None
     _health = None
     _structured_logger = None
     _capability_scorer = None
@@ -411,6 +417,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         _structured_logger = StructuredLogger()
         _cache = ResponseCache() if settings.cache_enabled else None
         _quota = QuotaTracker()
+        _rpm_governor = RpmGovernor()
         _health = RouteHealthTracker(persist_path=".sparrow/circuit_breakers.json")
         _capability_scorer = CapabilityScorer()
         _context_learner = ContextWindowLearner(persist_path=".sparrow/context_limits.json")
@@ -449,6 +456,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
                     provider_name=provider_name,
                     base_url=base_url,
                     models=models,
+                    api_keys=provider_data.get("api_keys"),
                 )
 
             for model in models:
@@ -511,6 +519,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
             _alias_resolver = None
             _health = None
             _quota = None
+            _rpm_governor = None
             _cache = None
             _structured_logger = None
             _capability_scorer = None
@@ -625,19 +634,27 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
     except AliasResolutionError as error:
         return _invalid_request_response(str(error), param="model", code="invalid_model")
     if not candidates:
+        if _routing_engine is not None:
+            logger.warning(
+                "No routes for model %s: %s",
+                model_input,
+                _routing_engine.explain_empty_candidates(model_input, max_tokens=max_tokens),
+            )
         return JSONResponse({"error": f"No routes for model: {model_input}"}, status_code=503)
 
     if _adapter_registry is None:
         return JSONResponse({"error": "Adapter registry not initialized"}, status_code=500)
 
     if chat_req.stream:
-        deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
         attempts = 0
         stream_last_error: Exception | None = None
         stream_only_timeouts = True
         stream_deadline_expired = False
 
         for route in candidates:
+            if _rpm_governor is not None:
+                await _rpm_governor.acquire(route.provider_id)
+            deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
             if attempts >= _MAX_REQUEST_ATTEMPTS:
                 break
             if _remaining(deadline) <= 0:
@@ -661,7 +678,7 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                     stream_deadline_expired = True
                     break
                 if not _acquire_attempt(route):
-                    break
+                    continue
 
                 attempts += 1
                 attempt_started = time.monotonic()
@@ -755,6 +772,11 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
         message = (
             "All providers timed out for streaming" if status_code == 504 else "All providers failed for streaming"
         )
+        logger.warning(
+            "All providers failed for streaming: %s (status=%s)",
+            type(stream_last_error).__name__ if stream_last_error is not None else "no-candidate",
+            status_code,
+        )
         return JSONResponse({"error": message}, status_code=status_code)
 
     deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
@@ -764,6 +786,8 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
     deadline_expired = False
 
     for route in candidates:
+        if _rpm_governor is not None:
+            await _rpm_governor.acquire(route.provider_id)
         if attempts >= _MAX_REQUEST_ATTEMPTS:
             break
         if _remaining(deadline) <= 0:
@@ -913,9 +937,15 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
             status_code=400,
         )
     if not candidates:
+        if _routing_engine is not None:
+            logger.warning(
+                "No routes for model %s (anthropic): %s",
+                model_input,
+                _routing_engine.explain_empty_candidates(model_input, max_tokens=max_tokens),
+            )
         return JSONResponse(
-            create_anthropic_error(404, f"No routes for model: {model_input}"),
-            status_code=404,
+            create_anthropic_error(503, f"No routes for model: {model_input}"),
+            status_code=503,
         )
 
     if _adapter_registry is None:
@@ -927,13 +957,15 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
     is_stream = body.get("stream", False)
 
     if is_stream:
-        deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
         attempts = 0
         stream_last_error: Exception | None = None
         stream_only_timeouts = True
         stream_deadline_expired = False
 
         for route in candidates:
+            if _rpm_governor is not None:
+                await _rpm_governor.acquire(route.provider_id)
+            deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
             if attempts >= _MAX_REQUEST_ATTEMPTS:
                 break
             if _remaining(deadline) <= 0:
@@ -957,7 +989,7 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
                     stream_deadline_expired = True
                     break
                 if not _acquire_attempt(route):
-                    break
+                    continue
 
                 attempts += 1
                 attempt_started = time.monotonic()
@@ -1045,6 +1077,11 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
         message = (
             "All providers timed out for streaming" if status_code == 504 else "All providers failed for streaming"
         )
+        logger.warning(
+            "All providers failed for streaming (anthropic): %s (status=%s)",
+            type(stream_last_error).__name__ if stream_last_error is not None else "no-candidate",
+            status_code,
+        )
         return JSONResponse(create_anthropic_error(status_code, message), status_code=status_code)
 
     deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
@@ -1054,6 +1091,8 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
     deadline_expired = False
 
     for route in candidates:
+        if _rpm_governor is not None:
+            await _rpm_governor.acquire(route.provider_id)
         if attempts >= _MAX_REQUEST_ATTEMPTS:
             break
         if _remaining(deadline) <= 0:
@@ -1181,6 +1220,12 @@ async def embeddings(request: Request) -> JSONResponse:
     except AliasResolutionError as error:
         return _invalid_request_response(str(error), param="model", code="invalid_model")
     if not candidates:
+        if _routing_engine is not None:
+            logger.warning(
+                "No routes for model %s: %s",
+                model_input,
+                _routing_engine.explain_empty_candidates(model_input),
+            )
         return JSONResponse({"error": f"No routes for model: {model_input}"}, status_code=503)
 
     deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
@@ -1190,6 +1235,8 @@ async def embeddings(request: Request) -> JSONResponse:
     deadline_expired = False
 
     for route in candidates:
+        if _rpm_governor is not None:
+            await _rpm_governor.acquire(route.provider_id)
         if attempts >= _MAX_REQUEST_ATTEMPTS:
             break
         if _remaining(deadline) <= 0:

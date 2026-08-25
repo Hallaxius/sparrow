@@ -28,6 +28,31 @@ class TestAdapterRegistry:
         assert adapter.id == "test-provider"
         assert "model-1" in adapter.available_models
 
+    def test_build_headers_includes_bearer_when_api_key_set(self):
+        adapter = OpenAICompatAdapter(
+            provider_id="empero",
+            provider_name="Empero",
+            base_url="https://free.empero.org/v1",
+            models=[{"id": "Qwen/Qwen3.8-27B-FP8", "name": "Qwen3.8 FP8", "enabled": True}],
+            client=httpx.AsyncClient(),
+            api_key="free",
+        )
+
+        headers = adapter._build_headers()
+        assert headers["Authorization"] == "Bearer free"
+
+    def test_build_headers_omits_authorization_without_api_key(self):
+        adapter = OpenAICompatAdapter(
+            provider_id="anon",
+            provider_name="Anon",
+            base_url="https://api.anon.com/v1",
+            models=[{"id": "m1", "name": "M1", "enabled": True}],
+            client=httpx.AsyncClient(),
+        )
+
+        headers = adapter._build_headers()
+        assert "Authorization" not in headers
+
     def test_get_adapter(self):
         registry = AdapterRegistry()
         client = httpx.AsyncClient()
@@ -144,3 +169,54 @@ async def test_chat_completion_stream_parses_sse_variants_and_closes_response():
 
     assert chunks == ['{"id":"first"}', '\t{"usage":{"total_tokens":1}}']
     assert stream_state["closed"] is True
+
+
+@pytest.mark.asyncio
+async def test_build_headers_rotates_across_configured_keys():
+    adapter = OpenAICompatAdapter(
+        provider_id="nvidia",
+        provider_name="NVIDIA",
+        base_url="https://integrate.api.nvidia.com/v1",
+        models=[{"id": "m1", "name": "M1", "enabled": True}],
+        client=httpx.AsyncClient(),
+        api_keys=["key-a", "key-b"],
+    )
+
+    headers_a = adapter._build_headers()
+    headers_b = adapter._build_headers()
+    assert headers_a["Authorization"] == "Bearer key-a"
+    assert headers_b["Authorization"] == "Bearer key-b"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_stream_rotates_key_on_429():
+    request_count = 0
+    used_keys = []
+
+    class RotatingStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            used_keys.append(adapter._current_key())
+            yield b'data:{"id":"first"}\r\n\r\n'
+            yield b"data:   [DONE]\r\n\r\n"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        if request_count < 2:
+            return httpx.Response(429, json={"error": "rate limited"})
+        return httpx.Response(200, stream=RotatingStream(), request=request)
+
+    request = ChatRequest(model="m1", messages=[ChatMessage(role="user", content="hello")], stream=True)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = OpenAICompatAdapter(
+            provider_id="nvidia",
+            provider_name="NVIDIA",
+            base_url="https://integrate.api.nvidia.com/v1",
+            models=[{"id": "m1", "name": "M1", "enabled": True}],
+            client=client,
+            api_keys=["key-a", "key-b"],
+        )
+        chunks = [chunk async for chunk in adapter.chat_completion_stream(request, "m1")]
+
+    assert chunks == ['{"id":"first"}']
+    assert used_keys[0] == "key-b"

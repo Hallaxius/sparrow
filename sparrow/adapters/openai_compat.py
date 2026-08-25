@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -36,12 +37,18 @@ class OpenAICompatAdapter:
         base_url: str,
         models: list[ProviderModelRuntime],
         client: httpx.AsyncClient,
+        api_key: str | None = None,
+        api_keys: list[str] | None = None,
     ) -> None:
         self._id = provider_id
         self._name = provider_name
         self._base_url = base_url.rstrip("/")
         self._models = models
         self._client = client
+        self._api_keys = list(api_keys or [])
+        if api_key and api_key not in self._api_keys:
+            self._api_keys.append(api_key)
+        self._key_cycle = itertools.cycle(self._api_keys) if self._api_keys else None
         self._ua = UserAgent()
 
         if "gpt.chat" in self._base_url:
@@ -54,8 +61,20 @@ class OpenAICompatAdapter:
             self._chat_path = "/chat/completions"
             self._extra_headers = {}
 
+    def rotate_key(self) -> None:
+        if self._key_cycle is not None:
+            next(self._key_cycle)
+
+    def _current_key(self) -> str | None:
+        if self._key_cycle is None:
+            return None
+        return next(self._key_cycle)
+
     def _build_headers(self) -> dict[str, str]:
         headers = dict(self._extra_headers)
+        key = self._current_key()
+        if key is not None:
+            headers["Authorization"] = f"Bearer {key}"
         headers["User-Agent"] = self._ua.random
         return headers
 
@@ -77,10 +96,17 @@ class OpenAICompatAdapter:
     async def chat_completion(self, request: ChatRequest, model: str, **kwargs: object) -> ChatResponse:
         url = f"{self._base_url}{self._chat_path}"
         payload = request.model_dump(exclude_none=True)
+        if request.extra_body:
+            payload.update(request.extra_body)
         payload["model"] = model
 
         response = await self._client.post(url, json=payload, headers=self._build_headers())
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                self.rotate_key()
+            raise
         try:
             data = response.json()
         except (TypeError, ValueError) as exc:
@@ -112,31 +138,43 @@ class OpenAICompatAdapter:
         payload["model"] = model
         payload["stream"] = True
 
-        async with self._client.stream("POST", url, json=payload, headers=self._build_headers()) as response:
-            response.raise_for_status()
-            data_lines: list[str] = []
-            async for line in response.aiter_lines():
-                if line == "":
-                    if not data_lines:
+        last_error: httpx.HTTPStatusError | None = None
+        for _ in range(max(1, len(self._api_keys))):
+            async with self._client.stream("POST", url, json=payload, headers=self._build_headers()) as response:
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    last_error = exc
+                    if exc.response.status_code == 429:
+                        self.rotate_key()
                         continue
-                    data_str = "\n".join(data_lines)
-                    data_lines = []
-                    if data_str.strip() == "[DONE]":
-                        return
-                    yield data_str
-                    continue
-                if line.startswith(":"):
-                    continue
-                if line.startswith("data:"):
-                    data_str = line[5:]
-                    if data_str.startswith((" ", "\t")):
-                        data_str = data_str[1:]
-                    data_lines.append(data_str)
+                    raise
+                data_lines: list[str] = []
+                async for line in response.aiter_lines():
+                    if line == "":
+                        if not data_lines:
+                            continue
+                        data_str = "\n".join(data_lines)
+                        data_lines = []
+                        if data_str.strip() == "[DONE]":
+                            return
+                        yield data_str
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("data:"):
+                        data_str = line[5:]
+                        if data_str.startswith((" ", "\t")):
+                            data_str = data_str[1:]
+                        data_lines.append(data_str)
 
-            if data_lines:
-                data_str = "\n".join(data_lines)
-                if data_str.strip() != "[DONE]":
-                    yield data_str
+                if data_lines:
+                    data_str = "\n".join(data_lines)
+                    if data_str.strip() != "[DONE]":
+                        yield data_str
+                break
+        if last_error is not None:
+            raise last_error
 
     async def embedding(self, request: EmbeddingRequest, model: str, **kwargs: object) -> EmbeddingResponse:
         url = f"{self._base_url}/embeddings"

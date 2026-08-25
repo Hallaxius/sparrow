@@ -11,12 +11,13 @@ logger = logging.getLogger("sparrow.routing.context_window")
 CONTEXT_OVERFLOW_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"context.?length.?exceed", re.IGNORECASE),
     re.compile(r"too.?many.?tokens", re.IGNORECASE),
-    re.compile(r"maximum.?context", re.IGNORECASE),
-    re.compile(r"context.?window", re.IGNORECASE),
+    re.compile(r"maximum.?context.?length", re.IGNORECASE),
     re.compile(r"token.?limit.?exceed", re.IGNORECASE),
     re.compile(r"input.?too.?long", re.IGNORECASE),
     re.compile(r"max.?tokens.*exceed", re.IGNORECASE),
 ]
+
+LEARNED_LIMIT_FLOOR_RATIO: float = 0.5
 
 DEFAULT_TTL_SECONDS: int = 1800
 DEFAULT_MAX_ENTRIES: int = 512
@@ -96,14 +97,20 @@ class ContextWindowLearner:
         return min(learned.tokens, declared_limit)
 
     def record_from_error(
-        self, provider_id: str, model_id: str, error_message: str, max_tokens: int | None = None
+        self,
+        provider_id: str,
+        model_id: str,
+        error_message: str,
+        max_tokens: int | None = None,
+        declared_limit: int | None = None,
     ) -> bool:
         if not is_context_overflow(error_message):
             return False
-        if max_tokens is not None and max_tokens > 0:
-            learned_tokens = int(max_tokens * 0.85)
-        else:
+        if max_tokens is None or max_tokens <= 0:
             return False
+        if declared_limit is not None and declared_limit > 0 and max_tokens < declared_limit * LEARNED_LIMIT_FLOOR_RATIO:
+            return False
+        learned_tokens = int(max_tokens * 0.85)
         key = self._key(provider_id, model_id)
         existing = self._limits.get(key)
         if existing is not None and not existing.is_stale and learned_tokens >= existing.tokens:

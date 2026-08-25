@@ -195,6 +195,10 @@ def providers_config_to_providers_json(config: ProvidersConfig) -> str:
         }
         if provider.daily_quota is not None:
             entry["daily_quota"] = provider.daily_quota
+        if provider.api_key is not None:
+            entry["api_key"] = provider.api_key
+        if provider.api_keys:
+            entry["api_keys"] = provider.api_keys
         providers_data[provider_id] = entry
 
     output: dict[str, Any] = {

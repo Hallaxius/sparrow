@@ -20,6 +20,7 @@ class ProviderRuntime(TypedDict):
     base_url: str
     adapter: str
     auth: str
+    api_keys: list[str]
     models: list[ProviderModelRuntime]
     daily_quota: int | None
 
@@ -57,6 +58,8 @@ class ProviderConfig(BaseModel):
     base_url: str
     adapter: str = "openai"
     auth: str = "none"
+    api_key: str | None = None
+    api_keys: list[str] = Field(default_factory=list)
     models: list[ProviderModelConfig] = Field(default_factory=list)
     daily_quota: NonNegativeInt | None = None
 
@@ -68,6 +71,14 @@ class ProviderConfig(BaseModel):
             message = "base_url must be an absolute HTTP URL"
             raise ValueError(message)
         return value
+
+    @model_validator(mode="after")
+    def normalize_api_keys(self) -> ProviderConfig:
+        if self.api_keys:
+            return self
+        if self.api_key:
+            return self.model_copy(update={"api_keys": [self.api_key]})
+        return self
 
     @model_validator(mode="after")
     def require_enabled_model(self) -> ProviderConfig:
@@ -82,6 +93,7 @@ class ProviderConfig(BaseModel):
             "base_url": self.base_url,
             "adapter": self.adapter,
             "auth": self.auth,
+            "api_keys": list(self.api_keys),
             "models": [model.to_runtime() for model in self.models],
             "daily_quota": self.daily_quota,
         }

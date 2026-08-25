@@ -92,11 +92,18 @@ class RoutingEngine:
         self._routes.append(route)
 
     def record_context_overflow(
-        self, provider_id: str, model_id: str, error_message: str, max_tokens: int | None = None
+        self,
+        provider_id: str,
+        model_id: str,
+        error_message: str,
+        max_tokens: int | None = None,
+        declared_limit: int | None = None,
     ) -> bool:
         if self._context_learner is None:
             return False
-        return self._context_learner.record_from_error(provider_id, model_id, error_message, max_tokens)
+        return self._context_learner.record_from_error(
+            provider_id, model_id, error_message, max_tokens, declared_limit
+        )
 
     @property
     def context_learner(self) -> ContextWindowLearner | None:
@@ -136,6 +143,50 @@ class RoutingEngine:
         candidates = self._filter_by_context(candidates, max_tokens)
 
         return candidates
+
+    def explain_empty_candidates(
+        self,
+        model: str,
+        max_tokens: int | None = None,
+        provider_id: str | None = None,
+    ) -> str:
+        if model == "auto":
+            resolved = list(self._routes)
+        else:
+            related = self._related_models.get(model)
+            if related is None:
+                resolved = [r for r in self._routes if r.model_id == model]
+            else:
+                resolved = [r for r in self._routes if r.model_id in related]
+
+        if provider_id is not None:
+            resolved = [r for r in resolved if r.provider_id == provider_id]
+
+        if not resolved:
+            return "unknown_model"
+
+        if not self._healthy_candidates(resolved):
+            return "no_healthy_routes"
+
+        if self._quota is not None:
+            quota_ok = [
+                route
+                for route in resolved
+                if (
+                    self._quota.can_request(route.provider_id, route.model_id, route.daily_quota)
+                    if route.daily_quota is not None
+                    else self._quota.can_request(route.provider_id, route.model_id)
+                )
+            ]
+            if not quota_ok:
+                return "quota_exhausted"
+
+        if max_tokens is not None:
+            context_ok = self._filter_by_context(resolved, max_tokens)
+            if not context_ok:
+                return "context_limit_too_low"
+
+        return "no_candidates"
 
     def ordered_candidates(
         self,

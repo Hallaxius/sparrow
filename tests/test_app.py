@@ -649,6 +649,30 @@ async def test_unknown_model_or_alias_returns_safe_400(initialized_client, model
 
 
 @pytest.mark.asyncio
+async def test_anthropic_no_routes_returns_503(app, monkeypatch):
+    async with lifespan(app):
+        monkeypatch.setattr(
+            app_module._routing_engine,
+            "get_candidates",
+            lambda model, max_tokens=None, provider_id=None: [],
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/messages",
+                json={
+                    "model": "auto",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "max_tokens": 10,
+                },
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "api_error"
+
+
+@pytest.mark.asyncio
 async def test_alias_resolves_exact_target_and_configured_quality_order(app, monkeypatch):
     providers = {
         "slow": {
@@ -811,6 +835,126 @@ async def test_stream_error_after_first_event_emits_one_error_without_failover(a
     assert "data: [DONE]" not in response.text
     assert second_calls == 0
     assert first.closed is True
+
+
+@pytest.mark.asyncio
+async def test_stream_failover_skips_quota_exhausted_candidate(app, monkeypatch):
+    first_calls = 0
+    second = _TrackedAsyncIterator(["second"])
+
+    class QuotaAdapter:
+        def chat_completion_stream(self, request, model):
+            return _TrackedAsyncIterator(["unexpected"])
+
+    class SecondAdapter:
+        def chat_completion_stream(self, request, model):
+            return second
+
+    adapters = {"provider-1": QuotaAdapter(), "provider-2": SecondAdapter()}
+    routes = [
+        RoutingRoute(provider_id="provider-1", model_id="model-1"),
+        RoutingRoute(provider_id="provider-2", model_id="model-2"),
+    ]
+
+    def _fake_acquire(route):
+        nonlocal first_calls
+        if route.provider_id == "provider-1":
+            first_calls += 1
+            return False
+        return True
+
+    async with lifespan(app):
+        monkeypatch.setattr(app_module._routing_engine, "get_candidates", lambda model, max_tokens=None: routes)
+        monkeypatch.setattr(app_module, "_acquire_attempt", _fake_acquire)
+        monkeypatch.setattr(
+            app_module,
+            "_adapter_registry",
+            type("Registry", (), {"get": lambda self, provider_id: adapters[provider_id]})(),
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={"model": "auto", "messages": [{"role": "user", "content": "hello"}], "stream": True},
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+    assert response.status_code == 200
+    assert "data: second\n\ndata: [DONE]\n\n" in response.text
+    assert first_calls >= 1
+    assert second.closed is True
+
+
+@pytest.mark.asyncio
+async def test_stream_failover_resets_deadline_per_candidate(app, monkeypatch):
+    class _SlowAsyncIterator:
+        def __init__(self, events, error=None):
+            self.events = iter(events)
+            self.error = error
+            self.closed = False
+            self._first = True
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self) -> str:
+            if self._first:
+                self._first = False
+                await asyncio.sleep(0.2)
+            try:
+                return next(self.events)
+            except StopIteration:
+                if self.error is not None:
+                    error = self.error
+                    self.error = None
+                    raise error from None
+                raise StopAsyncIteration from None
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    fast = _TrackedAsyncIterator(["fast"])
+
+    class SlowAdapter:
+        def __init__(self):
+            self.last_stream = None
+
+        def chat_completion_stream(self, request, model):
+            self.last_stream = _SlowAsyncIterator(["slow"])
+            return self.last_stream
+
+    slow_adapter = SlowAdapter()
+
+    class FastAdapter:
+        def chat_completion_stream(self, request, model):
+            return fast
+
+    adapters = {"provider-1": slow_adapter, "provider-2": FastAdapter()}
+    routes = [
+        RoutingRoute(provider_id="provider-1", model_id="model-1"),
+        RoutingRoute(provider_id="provider-2", model_id="model-2"),
+    ]
+
+    async with lifespan(app):
+        monkeypatch.setattr(app_module, "_REQUEST_DEADLINE_SECONDS", 0.05)
+        monkeypatch.setattr(app_module._routing_engine, "get_candidates", lambda model, max_tokens=None: routes)
+        monkeypatch.setattr(
+            app_module,
+            "_adapter_registry",
+            type("Registry", (), {"get": lambda self, provider_id: adapters[provider_id]})(),
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={"model": "auto", "messages": [{"role": "user", "content": "hello"}], "stream": True},
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+    assert response.status_code == 200
+    assert "data: fast\n\ndata: [DONE]\n\n" in response.text
+    assert slow_adapter.last_stream is not None and slow_adapter.last_stream.closed is True
+    assert fast.closed is True
 
 
 def _single_route_stream_setup(monkeypatch, app, adapters):
@@ -1066,3 +1210,33 @@ async def test_streaming_bypasses_response_hooks(app, monkeypatch):
     assert "data: [DONE]" in response.text
     assert plugin.request_calls == 1
     assert plugin.response_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_extra_body_reaches_adapter_payload(app, monkeypatch):
+    captured = {}
+
+    class CapturingAdapter:
+        async def chat_completion(self, request, model):
+            captured["extra_body"] = request.extra_body
+            return _chat_response(model)
+
+    route = RoutingRoute(provider_id="test-provider", model_id="test-model")
+
+    async with lifespan(app):
+        monkeypatch.setattr(app_module._routing_engine, "get_candidates", lambda model, max_tokens=None: [route])
+        monkeypatch.setattr(app_module, "_adapter_registry", type("Registry", (), {"get": lambda self, _: CapturingAdapter()})())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "auto",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+                },
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+    assert response.status_code == 200
+    assert captured["extra_body"] == {"chat_template_kwargs": {"enable_thinking": True}}

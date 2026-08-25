@@ -28,6 +28,7 @@ class ChatRequest(BaseModel):
     response_format: dict[str, Any] | None = None
     user: str | None = None
     api_key: str | None = None
+    extra_body: dict[str, Any] | None = None
 
 
 class Usage(BaseModel):

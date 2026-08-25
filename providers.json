@@ -29,6 +29,25 @@
       "base_url": "https://api.llm7.io/v1",
       "adapter": "openai",
       "auth": "none"
+    },
+    "c1d70340-1800-4faf-aecc-63480c0ef315": {
+      "name": "Empero",
+      "base_url": "https://free.empero.org/v1",
+      "adapter": "openai",
+      "auth": "bearer",
+      "api_key": "free"
+    },
+    "e142a874-b2b2-4b25-86b3-07834bee7126": {
+      "name": "NVIDIA",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "adapter": "openai",
+      "auth": "bearer",
+      "api_keys": [
+        "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",
+        "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",
+        "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",
+        "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"
+      ]
     }
   },
   "aliases": {
@@ -38,7 +57,19 @@
     "claude-3-haiku": "1321946a-0d1a-4c00-882e-c626e19047e5/hy3-free",
     "deepseek-r1": "f3100559-d247-449a-baa1-5092dc4fcf6c/DeepSeek-V4-Flash-0731",
     "gemini-2.5-flash": "f3100559-d247-449a-baa1-5092dc4fcf6c/gemini-3.1-flash-lite",
-    "mistral-small": "c193adf9-0783-40fa-a892-3ad8463a2fb6/Mistral-Small-3.2-24B-Instruct-2506"
+    "mistral-small": "c193adf9-0783-40fa-a892-3ad8463a2fb6/Mistral-Small-3.2-24B-Instruct-2506",
+    "qwen3.8-fp8": "c1d70340-1800-4faf-aecc-63480c0ef315/Qwen/Qwen3.8-27B-FP8",
+    "nvidia-gpt-oss-20b": "e142a874-b2b2-4b25-86b3-07834bee7126/openai/gpt-oss-20b",
+    "nvidia-gemma-4-31b": "e142a874-b2b2-4b25-86b3-07834bee7126/google/gemma-4-31b-it",
+    "nvidia-deepseek-v4-flash": "e142a874-b2b2-4b25-86b3-07834bee7126/deepseek-ai/deepseek-v4-flash-0731",
+    "nvidia-gpt-oss-120b": "e142a874-b2b2-4b25-86b3-07834bee7126/openai/gpt-oss-120b",
+    "nvidia-nemotron-3.5-lightning": "e142a874-b2b2-4b25-86b3-07834bee7126/nvidia/nemotron-3.5-lightning-30b-a3b",
+    "nvidia-muse-glimmer-30b": "e142a874-b2b2-4b25-86b3-07834bee7126/meta/muse-glimmer-30b",
+    "nvidia-laguna-xs-2.1": "e142a874-b2b2-4b25-86b3-07834bee7126/poolside/laguna-xs-2.1",
+    "nvidia-minimax-m3": "e142a874-b2b2-4b25-86b3-07834bee7126/minimaxai/minimax-m3",
+    "nvidia-nemotron-3-ultra-550b": "e142a874-b2b2-4b25-86b3-07834bee7126/nvidia/nemotron-3-ultra-550b-a55b",
+    "nvidia-step-3.7-flash": "e142a874-b2b2-4b25-86b3-07834bee7126/stepfun-ai/step-3.7-flash",
+    "nvidia-nemotron-3-nano-omni": "e142a874-b2b2-4b25-86b3-07834bee7126/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
   },
   "model_groups": {
     "hy3": ["hy3-free", "tencent/hy3:free"],
@@ -50,6 +81,8 @@
       "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
       "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
     ],
-    "mistral-nemo-2407": ["Mistral-Nemo-Instruct-2407", "mistral-Nemo-Instruct-2407"]
+    "mistral-nemo-2407": ["Mistral-Nemo-Instruct-2407", "mistral-Nemo-Instruct-2407"],
+    "nvidia-gpt-oss": ["openai/gpt-oss-20b", "openai/gpt-oss-120b"],
+    "nvidia-nemotron-3.5": ["nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b"]
   }
 }

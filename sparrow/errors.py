@@ -25,11 +25,6 @@ class UpstreamResponseError(ProviderError):
         super().__init__(provider, f"Invalid {resource} response")
 
 
-class CircuitBreakerOpenError(ProviderError):
-    def __init__(self, provider: str) -> None:
-        super().__init__(provider, "Circuit breaker open")
-
-
 class ConfigError(SparrowError):
     pass
 

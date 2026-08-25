@@ -98,6 +98,10 @@ class RoutingEngine:
             return False
         return self._context_learner.record_from_error(provider_id, model_id, error_message, max_tokens)
 
+    @property
+    def context_learner(self) -> ContextWindowLearner | None:
+        return self._context_learner
+
     def get_candidates(
         self,
         model: str,

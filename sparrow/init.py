@@ -92,60 +92,6 @@ def is_chat_model(model: dict[str, Any]) -> bool:
     return True
 
 
-def _get_pricing(model: dict[str, Any]) -> dict[str, Any]:
-    pricing = model.get("pricing")
-    if isinstance(pricing, dict):
-        return pricing
-    return {}
-
-
-def is_model_free(provider_id: str, model: dict[str, Any]) -> bool:
-    if provider_id == "ovhcloud":
-        pricing = _get_pricing(model)
-        prompt = str(pricing.get("prompt", "1"))
-        completion = str(pricing.get("completion", "1"))
-        try:
-            return float(prompt) == 0.0 and float(completion) == 0.0
-        except (ValueError, TypeError):
-            return prompt == "0" and completion == "0"
-
-    if provider_id == "kilo":
-        is_free = model.get("isFree")
-        if is_free is True:
-            return True
-        pricing = _get_pricing(model)
-        prompt = str(pricing.get("prompt", "1"))
-        completion = str(pricing.get("completion", "1"))
-        return prompt == "0" and completion == "0"
-
-    if provider_id == "opencode":
-        model_id = str(model.get("id", ""))
-        return model_id.endswith("-free")
-
-    if provider_id == "llm7":
-        pricing = _get_pricing(model)
-        input_price = pricing.get("input", 1)
-        output_price = pricing.get("output", 1)
-        try:
-            return float(input_price) == 0.0 and float(output_price) == 0.0
-        except (ValueError, TypeError):
-            return False
-
-    if provider_id == "blockrun":
-        billing_mode = model.get("billing_mode")
-        if billing_mode == "free":
-            return True
-        pricing = _get_pricing(model)
-        input_price = pricing.get("input", 1)
-        output_price = pricing.get("output", 1)
-        try:
-            return float(input_price) == 0.0 and float(output_price) == 0.0
-        except (ValueError, TypeError):
-            return False
-
-    return False
-
-
 async def fetch_models_from_provider(
     provider_id: str, base_url: str, client: httpx.AsyncClient
 ) -> list[dict[str, Any]]:

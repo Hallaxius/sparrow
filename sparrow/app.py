@@ -58,6 +58,7 @@ logger = logging.getLogger("sparrow")
 _MAX_REQUEST_ATTEMPTS = 4
 _MAX_ROUTE_ATTEMPTS = 2
 _REQUEST_DEADLINE_SECONDS = 120.0
+_STREAM_IDLE_TIMEOUT_SECONDS = 120.0
 _RETRY_BASE_DELAY = 1.0
 _RETRY_MAX_DELAY = 10.0
 _RETRY_BACKOFF_FACTOR = 2.0
@@ -218,6 +219,11 @@ async def _call_with_deadline[T](operation: Callable[[], Awaitable[T]], deadline
         return await operation()
 
 
+async def _next_stream_chunk(stream: AsyncIterator[str]) -> str:
+    async with asyncio.timeout(_STREAM_IDLE_TIMEOUT_SECONDS):
+        return await stream.__anext__()
+
+
 def _error_status(error: Exception) -> int | None:
     if isinstance(error, httpx.HTTPStatusError):
         return error.response.status_code
@@ -288,6 +294,18 @@ def _failure_status(last_error: Exception | None, only_timeouts: bool, deadline_
     return 503
 
 
+def _stream_error_message(error: Exception) -> str:
+    return "Upstream stream timed out" if _is_timeout_error(error) else "Upstream stream failed"
+
+
+def _stream_error_payload(error: Exception) -> dict[str, dict[str, str]]:
+    return {"error": {"message": _stream_error_message(error), "type": "upstream_error"}}
+
+
+def _stream_error_status(error: Exception) -> int:
+    return 504 if _is_timeout_error(error) else 502
+
+
 async def _chat_operation(adapter: ProviderAdapter, request: ChatRequest, model: str) -> ChatResponse:
     return await adapter.chat_completion(request, model)
 
@@ -326,9 +344,8 @@ def _record_attempt(
             breaker.record_success()
         else:
             breaker.record_failure()
-    if error is not None and _context_learner is not None:
-        error_msg = str(error)
-        _context_learner.record_from_error(route.provider_id, route.model_id, error_msg, max_tokens)
+    if error is not None and _routing_engine is not None:
+        _routing_engine.record_context_overflow(route.provider_id, route.model_id, str(error), max_tokens)
     return latency_ms
 
 
@@ -452,6 +469,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         )
 
         _plugin_registry = PluginRegistry()
+        await _plugin_registry.startup()
 
         raw_key = settings.api_key
         if not raw_key:
@@ -473,6 +491,12 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
             _readiness = ReadinessState(ready=False, reason="startup_failed")
         raise
     finally:
+        plugin_registry = _plugin_registry
+        if plugin_registry is not None:
+            try:
+                await plugin_registry.shutdown()
+            except BaseException:
+                logger.exception("Failed to shut down plugin registry")
         active_client = _client
         try:
             if active_client:
@@ -498,13 +522,6 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
             get_api_key_auth().set_keys(None)
             if not startup_failed:
                 _readiness = ReadinessState(ready=False, reason="shutdown")
-
-
-def get_plugin_registry() -> PluginRegistry:
-    global _plugin_registry
-    if _plugin_registry is None:
-        _plugin_registry = PluginRegistry()
-    return _plugin_registry
 
 
 async def health_check(request: Request) -> JSONResponse:
@@ -584,6 +601,10 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
         body = await request.json()
     except Exception:
         return _invalid_request_response("Invalid JSON body", code="invalid_json")
+
+    registry = _plugin_registry
+    if registry is not None:
+        body = await registry.run_request_hooks(body)
 
     try:
         chat_req = ChatRequest.model_validate(body)
@@ -686,26 +707,25 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                 _gen: AsyncIterator[str],
                 _route: RoutingRoute,
                 _attempt_started: float,
-                _deadline: float,
             ) -> AsyncIterator[str]:
                 outcome_error: Exception | None = RuntimeError("stream closed before completion")
                 try:
                     yield f"data: {_first}\n\n"
                     while True:
                         try:
-                            chunk = await _call_with_deadline(_gen.__anext__, _deadline)
+                            chunk = await _next_stream_chunk(_gen)
                         except StopAsyncIteration:
                             break
                         yield f"data: {chunk}\n\n"
                     yield "data: [DONE]\n\n"
                     outcome_error = None
+                except (GeneratorExit, asyncio.CancelledError):
+                    outcome_error = None
+                    raise
                 except Exception as error:
                     outcome_error = error
-                    logger.error("Stream error from %s: %s", _route.provider_id, type(error).__name__)
-                    error_chunk = {
-                        "error": {"message": "Upstream stream failed", "type": "upstream_error"},
-                    }
-                    yield f"data: {json.dumps(error_chunk)}\n\n"
+                    logger.error("Stream error from %s/%s: %r", _route.provider_id, _route.model_id, error)
+                    yield f"data: {json.dumps(_stream_error_payload(error))}\n\n"
                 finally:
                     await _close_stream(_gen)
                     latency_ms = _record_attempt(_route, _attempt_started, outcome_error, max_tokens=max_tokens)
@@ -721,7 +741,7 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                         )
 
             return StreamingResponse(
-                _stream_events(first_chunk, remaining_gen, route, attempt_started, deadline),
+                _stream_events(first_chunk, remaining_gen, route, attempt_started),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -805,6 +825,10 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
             latency_ms = _record_attempt(route, attempt_started, tokens=tokens)
             resp_json = route_response.model_dump()
 
+            registry = _plugin_registry
+            if registry is not None:
+                resp_json = await registry.run_response_hooks(resp_json)
+
             if cacheable and _cache and route_response.choices:
                 _cache.set(route.provider_id, route.model_id, cache_body, resp_json, scope=cache_scope)
 
@@ -859,6 +883,10 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
             create_anthropic_error(400, "Invalid JSON body"),
             status_code=400,
         )
+
+    registry = _plugin_registry
+    if registry is not None:
+        body = await registry.run_request_hooks(body)
 
     try:
         chat_req = anthropic_to_chat_request(body)
@@ -975,7 +1003,6 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
                 _gen: AsyncIterator[str],
                 _route: RoutingRoute,
                 _attempt_started: float,
-                _deadline: float,
             ) -> AsyncIterator[str]:
                 outcome_error: Exception | None = RuntimeError("stream closed before completion")
                 try:
@@ -983,27 +1010,29 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
                         yield sse_event
                     while True:
                         try:
-                            chunk = await _call_with_deadline(_gen.__anext__, _deadline)
+                            chunk = await _next_stream_chunk(_gen)
                         except StopAsyncIteration:
                             break
                         try:
                             chunk_data = json.loads(chunk)
                             for sse_event in openai_chunk_to_anthropic_sse(chunk_data):
                                 yield sse_event
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+                        except (json.JSONDecodeError, TypeError) as chunk_error:
+                            logger.debug("Skipping malformed upstream chunk: %r", chunk_error)
                     outcome_error = None
+                except (GeneratorExit, asyncio.CancelledError):
+                    outcome_error = None
+                    raise
                 except Exception as error:
                     outcome_error = error
-                    logger.error("Stream error (anthropic) from %s: %s", _route.provider_id, type(error).__name__)
-                    error_event = create_anthropic_error(502, "Upstream stream failed")
-                    yield _sse_event(error_event)
+                    logger.error("Stream error (anthropic) from %s/%s: %r", _route.provider_id, _route.model_id, error)
+                    yield _sse_event(create_anthropic_error(_stream_error_status(error), _stream_error_message(error)))
                 finally:
                     await _close_stream(_gen)
                     _record_attempt(_route, _attempt_started, outcome_error, max_tokens=max_tokens)
 
             return StreamingResponse(
-                _anthropic_stream_events(first_chunk, remaining_gen, route, attempt_started, deadline),
+                _anthropic_stream_events(first_chunk, remaining_gen, route, attempt_started),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -1079,6 +1108,10 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
             latency_ms = _record_attempt(route, attempt_started, tokens=tokens)
             resp_json = chat_response_to_anthropic(route_response.model_dump())
 
+            registry = _plugin_registry
+            if registry is not None:
+                resp_json = await registry.run_response_hooks(resp_json)
+
             if _structured_logger:
                 _structured_logger.log_request(
                     method=request.method,
@@ -1128,6 +1161,10 @@ async def embeddings(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         return _invalid_request_response("Invalid JSON body", code="invalid_json")
+
+    registry = _plugin_registry
+    if registry is not None:
+        body = await registry.run_request_hooks(body)
 
     try:
         emb_req = EmbeddingRequest.model_validate(body)
@@ -1204,8 +1241,13 @@ async def embeddings(request: Request) -> JSONResponse:
 
             tokens = response.usage.total_tokens if response.usage else 0
             _record_attempt(route, attempt_started, tokens=tokens)
+            resp_json = response.model_dump()
+
+            registry = _plugin_registry
+            if registry is not None:
+                resp_json = await registry.run_response_hooks(resp_json)
             return JSONResponse(
-                response.model_dump(),
+                resp_json,
                 headers=_metadata_headers(route.provider_id, route.model_id),
             )
 

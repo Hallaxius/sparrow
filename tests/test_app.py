@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 import pytest
 
@@ -8,6 +10,7 @@ from sparrow.errors import ConfigError, ConfigurationFileError, UpstreamResponse
 from sparrow.middleware import auth as auth_module
 from sparrow.middleware.auth import get_api_key_auth
 from sparrow.models import ChatChoice, ChatMessage, ChatResponse, EmbeddingData, EmbeddingResponse
+from sparrow.plugins.registry import PluginRegistry
 from sparrow.routing.engine import Route as RoutingRoute
 
 
@@ -808,3 +811,258 @@ async def test_stream_error_after_first_event_emits_one_error_without_failover(a
     assert "data: [DONE]" not in response.text
     assert second_calls == 0
     assert first.closed is True
+
+
+def _single_route_stream_setup(monkeypatch, app, adapters):
+    routes = [RoutingRoute(provider_id="provider-1", model_id="model-1")]
+    monkeypatch.setattr(app_module._routing_engine, "get_candidates", lambda model, max_tokens=None: routes)
+    monkeypatch.setattr(
+        app_module,
+        "_adapter_registry",
+        type("Registry", (), {"get": lambda self, provider_id: adapters[provider_id]})(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_survives_beyond_request_deadline(app, monkeypatch):
+    monkeypatch.setattr(app_module, "_REQUEST_DEADLINE_SECONDS", 0.05)
+
+    async def slow_second_chunk():
+        yield "data-1"
+        await asyncio.sleep(0.3)
+        yield "data-2"
+
+    class Adapter:
+        def chat_completion_stream(self, request, model):
+            return slow_second_chunk()
+
+    adapters = {"provider-1": Adapter()}
+
+    async with lifespan(app):
+        _single_route_stream_setup(monkeypatch, app, adapters)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={"model": "auto", "messages": [{"role": "user", "content": "hello"}], "stream": True},
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+    assert response.status_code == 200
+    assert "data: data-1" in response.text
+    assert "data: data-2" in response.text
+    assert "data: [DONE]" in response.text
+    assert "upstream_error" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_stream_idle_timeout_emits_timeout_message(app, monkeypatch):
+    monkeypatch.setattr(app_module, "_STREAM_IDLE_TIMEOUT_SECONDS", 0.05)
+
+    async def stalled_after_first():
+        yield "first"
+        await asyncio.sleep(1.0)
+        yield "late"
+
+    class Adapter:
+        def chat_completion_stream(self, request, model):
+            return stalled_after_first()
+
+    adapters = {"provider-1": Adapter()}
+
+    async with lifespan(app):
+        _single_route_stream_setup(monkeypatch, app, adapters)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={"model": "auto", "messages": [{"role": "user", "content": "hello"}], "stream": True},
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+    assert response.status_code == 200
+    assert response.text.count("Upstream stream timed out") == 1
+    assert '"type": "upstream_error"' in response.text
+    assert "data: late" not in response.text
+    assert "data: [DONE]" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_stream_client_abort_does_not_record_provider_failure(app, monkeypatch):
+    async def two_chunks_slowly():
+        yield "chunk-1"
+        await asyncio.sleep(0.5)
+        yield "chunk-2"
+
+    class Adapter:
+        def chat_completion_stream(self, request, model):
+            return two_chunks_slowly()
+
+    adapters = {"provider-1": Adapter()}
+
+    async with lifespan(app):
+        _single_route_stream_setup(monkeypatch, app, adapters)
+        transport = httpx.ASGITransport(app=app)
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+            client.stream(
+                "POST",
+                "/v1/chat/completions",
+                json={"model": "auto", "messages": [{"role": "user", "content": "hello"}], "stream": True},
+                headers={"Authorization": "Bearer test-key"},
+            ) as response,
+        ):
+            assert response.status_code == 200
+            async for line in response.aiter_lines():
+                if line:
+                    break
+
+        engine = app_module._routing_engine
+        assert engine is not None
+        health = engine._health
+        assert health is not None
+        breaker = health.get_breaker("provider-1:model-1")
+        assert breaker.failures == 0
+
+
+class LifecyclePlugin:
+    def __init__(self):
+        self.started = False
+        self.stopped = False
+
+    @property
+    def name(self):
+        return "lifecycle"
+
+    @property
+    def version(self):
+        return "1.0"
+
+    async def on_startup(self):
+        self.started = True
+
+    async def on_shutdown(self):
+        self.stopped = True
+
+    async def on_request(self, request):
+        return request
+
+    async def on_response(self, response):
+        return response
+
+
+def _seeded_registry_factory(monkeypatch, plugin):
+    class SeededRegistry(PluginRegistry):
+        def __init__(self):
+            super().__init__()
+            self.register(plugin)
+
+    monkeypatch.setattr(app_module, "PluginRegistry", SeededRegistry)
+
+
+@pytest.mark.asyncio
+async def test_plugin_lifecycle_startup_and_shutdown(app, monkeypatch):
+    plugin = LifecyclePlugin()
+    _seeded_registry_factory(monkeypatch, plugin)
+
+    async with lifespan(app):
+        assert plugin.started is True
+        assert plugin.stopped is False
+
+    assert plugin.stopped is True
+
+
+class MutatingHookPlugin:
+    def __init__(self):
+        self.request_calls = 0
+        self.response_calls = 0
+
+    @property
+    def name(self):
+        return "mutating-hooks"
+
+    @property
+    def version(self):
+        return "1.0"
+
+    async def on_startup(self):
+        return None
+
+    async def on_shutdown(self):
+        return None
+
+    async def on_request(self, request):
+        self.request_calls += 1
+        request["temperature"] = 0.9
+        return request
+
+    async def on_response(self, response):
+        self.response_calls += 1
+        response["plugin_marker"] = "applied"
+        return response
+
+
+class TemperatureCapturingAdapter:
+    def __init__(self):
+        self.seen_temperature = None
+
+    async def chat_completion(self, request, model):
+        self.seen_temperature = request.temperature
+        return _chat_response(model)
+
+
+@pytest.mark.asyncio
+async def test_plugin_hooks_mutate_non_streaming_request_and_response(app, monkeypatch):
+    plugin = MutatingHookPlugin()
+    adapter = TemperatureCapturingAdapter()
+    routes = [RoutingRoute(provider_id="provider-1", model_id="model-1")]
+    _seeded_registry_factory(monkeypatch, plugin)
+
+    async with lifespan(app):
+        monkeypatch.setattr(app_module._routing_engine, "get_candidates", lambda model, max_tokens=None: routes)
+        monkeypatch.setattr(
+            app_module,
+            "_adapter_registry",
+            type("Registry", (), {"get": lambda self, provider_id: adapter})(),
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={"model": "auto", "messages": [{"role": "user", "content": "hello"}]},
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+    assert response.status_code == 200
+    assert response.json()["plugin_marker"] == "applied"
+    assert adapter.seen_temperature == 0.9
+
+
+@pytest.mark.asyncio
+async def test_streaming_bypasses_response_hooks(app, monkeypatch):
+    plugin = MutatingHookPlugin()
+    _seeded_registry_factory(monkeypatch, plugin)
+
+    async def single_chunk():
+        yield "chunk"
+
+    class Adapter:
+        def chat_completion_stream(self, request, model):
+            return single_chunk()
+
+    adapters = {"provider-1": Adapter()}
+
+    async with lifespan(app):
+        _single_route_stream_setup(monkeypatch, app, adapters)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json={"model": "auto", "messages": [{"role": "user", "content": "hello"}], "stream": True},
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+    assert response.status_code == 200
+    assert "data: [DONE]" in response.text
+    assert plugin.request_calls == 1
+    assert plugin.response_calls == 0

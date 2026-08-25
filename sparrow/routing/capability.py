@@ -135,9 +135,6 @@ class CapabilityScorer:
                 quality=quality,
             )
 
-    def register_model(self, model: ModelCapability) -> None:
-        self._models[model.model_id] = model
-
     def detect_task(self, messages: list[dict[str, Any]]) -> TaskHint:
         text = self._extract_text(messages)
         if not text:
@@ -176,15 +173,6 @@ class CapabilityScorer:
         scores = [m.score_for_task(task_type, context_tokens) for m in candidates]
         scores.sort(key=lambda s: s.total, reverse=True)
         return scores
-
-    def rank_for_messages(
-        self,
-        messages: list[dict[str, Any]],
-        model_ids: list[str] | None = None,
-    ) -> list[CapabilityScore]:
-        hint = self.detect_task(messages)
-        token_count = self._estimate_tokens(messages)
-        return self.score_models(hint.task_type, token_count, model_ids)
 
     def _estimate_tokens(self, messages: list[dict[str, Any]]) -> int:
         total_chars = 0

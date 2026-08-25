@@ -59,9 +59,6 @@ class StatsTracker:
     def get_provider_stats(self, provider: str) -> ProviderStats | None:
         return self._providers.get(provider)
 
-    def get_all_stats(self) -> dict[str, ProviderStats]:
-        return self._providers.copy()
-
     def get_summary(self) -> dict[str, Any]:
         return {
             "total_requests": self._total_requests,

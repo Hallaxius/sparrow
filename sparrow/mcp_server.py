@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -228,9 +227,9 @@ class MCPServer:
         }
 
     def _tool_context_limits(self, provider_id: str | None) -> dict[str, Any]:
-        if self._routing is None or not hasattr(self._routing, "_context_learner"):
-            return {"error": "Context learner not available"}
-        learner = self._routing._context_learner
+        if self._routing is None:
+            return {"error": "Routing engine not available"}
+        learner = self._routing.context_learner
         if learner is None:
             return {"error": "Context learner not initialized"}
         result: dict[str, Any] = {}
@@ -253,17 +252,3 @@ class MCPServer:
             "id": req_id,
             "error": {"code": code, "message": message},
         }
-
-    def run_stdio(self) -> None:
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                request = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            response = self._handle_request(request)
-            if response:
-                sys.stdout.write(json.dumps(response) + "\n")
-                sys.stdout.flush()

@@ -4,39 +4,7 @@ import json
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 from sparrow.models import ChatMessage, ChatRequest
-
-
-class AnthropicContentBlock(BaseModel):
-    type: str
-    text: str | None = None
-
-
-class AnthropicUsage(BaseModel):
-    input_tokens: int = 0
-    output_tokens: int = 0
-
-
-class AnthropicMessage(BaseModel):
-    id: str = Field(default_factory=lambda: f"msg_{uuid.uuid4().hex[:24]}")
-    type: str = "message"
-    role: str = "assistant"
-    content: list[AnthropicContentBlock]
-    model: str
-    stop_reason: str | None = "end_turn"
-    stop_sequence: str | None = None
-    usage: AnthropicUsage = AnthropicUsage()
-
-
-class AnthropicStreamEvent(BaseModel):
-    type: str
-    index: int | None = None
-    delta: dict[str, Any] | None = None
-    message: dict[str, Any] | None = None
-    content_block: dict[str, Any] | None = None
-    usage: dict[str, Any] | None = None
 
 
 def anthropic_to_chat_request(body: dict[str, Any]) -> ChatRequest:

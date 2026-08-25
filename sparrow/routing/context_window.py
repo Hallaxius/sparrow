@@ -122,17 +122,6 @@ class ContextWindowLearner:
         self._maybe_persist()
         return True
 
-    def record_limit(
-        self, provider_id: str, model_id: str, tokens: int, source: str = "explicit"
-    ) -> None:
-        key = self._key(provider_id, model_id)
-        self._limits[key] = LearnedLimit(
-            tokens=tokens,
-            ttl_seconds=self._ttl_seconds,
-            source=source,
-        )
-        self._maybe_persist()
-
     def clear_stale(self) -> int:
         before = len(self._limits)
         self._limits = {k: v for k, v in self._limits.items() if not v.is_stale}

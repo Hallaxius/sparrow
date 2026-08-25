@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import partial
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import httpx
 from pydantic import ValidationError
@@ -20,6 +20,13 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from sparrow.adapters.anthropic_shim import (
+    _sse_event,
+    anthropic_to_chat_request,
+    chat_response_to_anthropic,
+    create_anthropic_error,
+    openai_chunk_to_anthropic_sse,
+)
 from sparrow.adapters.base import ProviderAdapter
 from sparrow.adapters.registry import AdapterRegistry
 from sparrow.cache import ResponseCache
@@ -29,13 +36,17 @@ from sparrow.config.loader import load_all_providers, load_config
 from sparrow.config.models import Settings
 from sparrow.dashboard import DASHBOARD_HTML
 from sparrow.errors import ConfigError
+from sparrow.mcp_server import MCPServer
 from sparrow.metrics import metrics_endpoint as _metrics_endpoint
 from sparrow.metrics import record_cache_hit, record_cache_miss, record_request
 from sparrow.middleware.auth import AuthMiddleware, get_api_key_auth
 from sparrow.middleware.body_limit import BodySizeLimitMiddleware
 from sparrow.middleware.logging import StructuredLogger, generate_request_id
 from sparrow.models import ChatRequest, ChatResponse, EmbeddingRequest, EmbeddingResponse
+from sparrow.plugins.registry import PluginRegistry
 from sparrow.proxy import WARPConfig, WARPProxy
+from sparrow.routing.capability import CapabilityScorer
+from sparrow.routing.context_window import ContextWindowLearner
 from sparrow.routing.engine import Route as RoutingRoute
 from sparrow.routing.engine import RoutingEngine, RoutingMode
 from sparrow.routing.health import CircuitBreaker, RouteHealthTracker
@@ -73,6 +84,10 @@ _cache: ResponseCache | None = None
 _quota: QuotaTracker | None = None
 _health: RouteHealthTracker | None = None
 _structured_logger: StructuredLogger | None = None
+_capability_scorer: CapabilityScorer | None = None
+_context_learner: ContextWindowLearner | None = None
+_mcp_server: MCPServer | None = None
+_plugin_registry: PluginRegistry | None = None
 _start_time: float = 0.0
 
 
@@ -298,6 +313,7 @@ def _record_attempt(
     started: float,
     error: Exception | None = None,
     tokens: int = 0,
+    max_tokens: int | None = None,
 ) -> float:
     latency_ms = (time.monotonic() - started) * 1000
     success = error is None
@@ -310,20 +326,28 @@ def _record_attempt(
             breaker.record_success()
         else:
             breaker.record_failure()
+    if error is not None and _context_learner is not None:
+        error_msg = str(error)
+        _context_learner.record_from_error(route.provider_id, route.model_id, error_msg, max_tokens)
     return latency_ms
 
 
-def _get_routing_candidates(model: str, max_tokens: int | None = None) -> list[RoutingRoute]:
+def _get_routing_candidates(
+    model: str,
+    max_tokens: int | None = None,
+    messages: list[dict[str, Any]] | None = None,
+) -> list[RoutingRoute]:
     if _routing_engine is None or _alias_resolver is None:
         raise RuntimeError("Routing is not initialized")
 
     target = _alias_resolver.resolve(model)
     if target.provider_id is None:
-        return _routing_engine.ordered_candidates(target.model_id, max_tokens=max_tokens)
+        return _routing_engine.ordered_candidates(target.model_id, max_tokens=max_tokens, messages=messages)
     return _routing_engine.ordered_candidates(
         target.model_id,
         max_tokens=max_tokens,
         provider_id=target.provider_id,
+        messages=messages,
     )
 
 
@@ -340,6 +364,10 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         _quota, \
         _health, \
         _structured_logger, \
+        _capability_scorer, \
+        _context_learner, \
+        _mcp_server, \
+        _plugin_registry, \
         _readiness
 
     _client = None
@@ -351,6 +379,10 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
     _quota = None
     _health = None
     _structured_logger = None
+    _capability_scorer = None
+    _context_learner = None
+    _mcp_server = None
+    _plugin_registry = None
     _start_time = time.time()
     _readiness = ReadinessState(ready=False, reason="startup_incomplete")
     startup_failed = False
@@ -362,7 +394,9 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         _structured_logger = StructuredLogger()
         _cache = ResponseCache() if settings.cache_enabled else None
         _quota = QuotaTracker()
-        _health = RouteHealthTracker()
+        _health = RouteHealthTracker(persist_path=".sparrow/circuit_breakers.json")
+        _capability_scorer = CapabilityScorer()
+        _context_learner = ContextWindowLearner(persist_path=".sparrow/context_limits.json")
 
         providers_data = load_all_providers()
         _routing_engine = RoutingEngine(
@@ -370,6 +404,8 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
             quota=_quota,
             mode=RoutingMode(settings.routing),
             model_groups=providers_data.get("model_groups", {}),
+            capability_scorer=_capability_scorer,
+            context_learner=_context_learner,
         )
         warp = WARPProxy(WARPConfig.from_settings(settings))
         _client = SparrowClient(warp_proxy=warp)
@@ -409,6 +445,14 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
                     )
                     _routing_engine.register_route(route)
 
+        _mcp_server = MCPServer(
+            stats_tracker=_stats,
+            health_tracker=_health,
+            routing_engine=_routing_engine,
+        )
+
+        _plugin_registry = PluginRegistry()
+
         raw_key = settings.api_key
         if not raw_key:
             raise ConfigError("SPARROW_API_KEY is required; set it in the environment")
@@ -445,11 +489,22 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
             _quota = None
             _cache = None
             _structured_logger = None
+            _capability_scorer = None
+            _context_learner = None
+            _mcp_server = None
+            _plugin_registry = None
             _stats = None
             _start_time = 0.0
             get_api_key_auth().set_keys(None)
             if not startup_failed:
                 _readiness = ReadinessState(ready=False, reason="shutdown")
+
+
+def get_plugin_registry() -> PluginRegistry:
+    global _plugin_registry
+    if _plugin_registry is None:
+        _plugin_registry = PluginRegistry()
+    return _plugin_registry
 
 
 async def health_check(request: Request) -> JSONResponse:
@@ -545,7 +600,7 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
         return JSONResponse({"error": "Routing engine not initialized"}, status_code=500)
 
     try:
-        candidates = _get_routing_candidates(model_input, max_tokens=max_tokens)
+        candidates = _get_routing_candidates(model_input, max_tokens=max_tokens, messages=[m.model_dump() for m in chat_req.messages])
     except AliasResolutionError as error:
         return _invalid_request_response(str(error), param="model", code="invalid_model")
     if not candidates:
@@ -601,7 +656,7 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                     route_error = error
                     stream_last_error = error
                     stream_only_timeouts = stream_only_timeouts and _is_timeout_error(error)
-                    _record_attempt(route, attempt_started, error)
+                    _record_attempt(route, attempt_started, error, max_tokens=max_tokens)
                     if not (
                         _is_retryable_error(error)
                         and route_attempt + 1 < _MAX_ROUTE_ATTEMPTS
@@ -653,7 +708,7 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                     yield f"data: {json.dumps(error_chunk)}\n\n"
                 finally:
                     await _close_stream(_gen)
-                    latency_ms = _record_attempt(_route, _attempt_started, outcome_error)
+                    latency_ms = _record_attempt(_route, _attempt_started, outcome_error, max_tokens=max_tokens)
                     if _structured_logger:
                         _structured_logger.log_request(
                             method=request.method,
@@ -733,7 +788,7 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                 chat_route_error = error
                 last_error = error
                 only_timeouts = only_timeouts and _is_timeout_error(error)
-                _record_attempt(route, attempt_started, error)
+                _record_attempt(route, attempt_started, error, max_tokens=max_tokens)
                 if not (
                     _is_retryable_error(error)
                     and route_attempt + 1 < _MAX_ROUTE_ATTEMPTS
@@ -790,6 +845,266 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
         return JSONResponse({"error": "All providers timed out"}, status_code=status_code)
     return JSONResponse(
         {"error": f"All providers exhausted for model: {model_input}"},
+        status_code=status_code,
+    )
+
+
+async def anthropic_messages(request: Request) -> JSONResponse | StreamingResponse:
+    request_id = generate_request_id()
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            create_anthropic_error(400, "Invalid JSON body"),
+            status_code=400,
+        )
+
+    try:
+        chat_req = anthropic_to_chat_request(body)
+    except Exception as exc:
+        return JSONResponse(
+            create_anthropic_error(400, f"Invalid request: {exc}"),
+            status_code=400,
+        )
+
+    model_input = chat_req.model
+    max_tokens = chat_req.max_tokens
+
+    if _routing_engine is None or _alias_resolver is None:
+        return JSONResponse(
+            create_anthropic_error(500, "Routing engine not initialized"),
+            status_code=500,
+        )
+
+    try:
+        candidates = _get_routing_candidates(model_input, max_tokens=max_tokens, messages=[m.model_dump() for m in chat_req.messages])
+    except AliasResolutionError as error:
+        return JSONResponse(
+            create_anthropic_error(400, str(error)),
+            status_code=400,
+        )
+    if not candidates:
+        return JSONResponse(
+            create_anthropic_error(404, f"No routes for model: {model_input}"),
+            status_code=404,
+        )
+
+    if _adapter_registry is None:
+        return JSONResponse(
+            create_anthropic_error(500, "Adapter registry not initialized"),
+            status_code=500,
+        )
+
+    is_stream = body.get("stream", False)
+
+    if is_stream:
+        deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
+        attempts = 0
+        stream_last_error: Exception | None = None
+        stream_only_timeouts = True
+        stream_deadline_expired = False
+
+        for route in candidates:
+            if attempts >= _MAX_REQUEST_ATTEMPTS:
+                break
+            if _remaining(deadline) <= 0:
+                stream_deadline_expired = True
+                break
+
+            adapter = _adapter_registry.get(route.provider_id)
+            if adapter is None:
+                continue
+
+            chat_req.model = route.model_id
+            first_chunk: str | None = None
+            remaining_gen: AsyncIterator[str] | None = None
+            attempt_started = 0.0
+            route_error: Exception | None = None
+
+            for route_attempt in range(_MAX_ROUTE_ATTEMPTS):
+                if attempts >= _MAX_REQUEST_ATTEMPTS:
+                    break
+                if _remaining(deadline) <= 0:
+                    stream_deadline_expired = True
+                    break
+                if not _acquire_attempt(route):
+                    break
+
+                attempts += 1
+                attempt_started = time.monotonic()
+                gen: AsyncIterator[str] | None = None
+                stream_started = False
+                try:
+                    gen = adapter.chat_completion_stream(chat_req, route.model_id)
+                    first_chunk = await _call_with_deadline(gen.__anext__, deadline)
+                    remaining_gen = gen
+                    stream_started = True
+                    break
+                except Exception as error:
+                    route_error = error
+                    stream_last_error = error
+                    stream_only_timeouts = stream_only_timeouts and _is_timeout_error(error)
+                    _record_attempt(route, attempt_started, error, max_tokens=max_tokens)
+                    if not (
+                        _is_retryable_error(error)
+                        and route_attempt + 1 < _MAX_ROUTE_ATTEMPTS
+                        and attempts < _MAX_REQUEST_ATTEMPTS
+                        and _remaining(deadline) > 0
+                    ):
+                        break
+                    if not await _wait_before_retry(error, route_attempt, deadline):
+                        stream_deadline_expired = True
+                        break
+                finally:
+                    if gen is not None and not stream_started:
+                        await _close_stream(gen)
+
+            if first_chunk is None or remaining_gen is None:
+                if route_error is not None:
+                    logger.warning(
+                        "Failover (anthropic): %s/%s stream failed (%s), trying next",
+                        route.provider_id,
+                        route.model_id,
+                        type(route_error).__name__,
+                    )
+                continue
+
+            async def _anthropic_stream_events(
+                _first: str,
+                _gen: AsyncIterator[str],
+                _route: RoutingRoute,
+                _attempt_started: float,
+                _deadline: float,
+            ) -> AsyncIterator[str]:
+                outcome_error: Exception | None = RuntimeError("stream closed before completion")
+                try:
+                    for sse_event in openai_chunk_to_anthropic_sse(json.loads(_first)):
+                        yield sse_event
+                    while True:
+                        try:
+                            chunk = await _call_with_deadline(_gen.__anext__, _deadline)
+                        except StopAsyncIteration:
+                            break
+                        try:
+                            chunk_data = json.loads(chunk)
+                            for sse_event in openai_chunk_to_anthropic_sse(chunk_data):
+                                yield sse_event
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    outcome_error = None
+                except Exception as error:
+                    outcome_error = error
+                    logger.error("Stream error (anthropic) from %s: %s", _route.provider_id, type(error).__name__)
+                    error_event = create_anthropic_error(502, "Upstream stream failed")
+                    yield _sse_event(error_event)
+                finally:
+                    await _close_stream(_gen)
+                    _record_attempt(_route, _attempt_started, outcome_error, max_tokens=max_tokens)
+
+            return StreamingResponse(
+                _anthropic_stream_events(first_chunk, remaining_gen, route, attempt_started, deadline),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        status_code = _failure_status(stream_last_error, stream_only_timeouts, stream_deadline_expired)
+        message = (
+            "All providers timed out for streaming" if status_code == 504 else "All providers failed for streaming"
+        )
+        return JSONResponse(create_anthropic_error(status_code, message), status_code=status_code)
+
+    deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
+    attempts = 0
+    last_error: Exception | None = None
+    only_timeouts = True
+    deadline_expired = False
+
+    for route in candidates:
+        if attempts >= _MAX_REQUEST_ATTEMPTS:
+            break
+        if _remaining(deadline) <= 0:
+            deadline_expired = True
+            break
+
+        adapter = _adapter_registry.get(route.provider_id)
+        if adapter is None:
+            continue
+
+        chat_req.model = route.model_id
+        chat_route_error: Exception | None = None
+
+        for route_attempt in range(_MAX_ROUTE_ATTEMPTS):
+            if attempts >= _MAX_REQUEST_ATTEMPTS:
+                break
+            if _remaining(deadline) <= 0:
+                deadline_expired = True
+                break
+            if not _acquire_attempt(route):
+                break
+
+            attempts += 1
+            attempt_started = time.monotonic()
+            chat_operation: Callable[[], Awaitable[ChatResponse]] = partial(
+                _chat_operation,
+                adapter,
+                chat_req,
+                route.model_id,
+            )
+
+            try:
+                route_response = await _call_with_deadline(chat_operation, deadline)
+            except Exception as error:
+                chat_route_error = error
+                last_error = error
+                only_timeouts = only_timeouts and _is_timeout_error(error)
+                _record_attempt(route, attempt_started, error, max_tokens=max_tokens)
+                if not (
+                    _is_retryable_error(error)
+                    and route_attempt + 1 < _MAX_ROUTE_ATTEMPTS
+                    and attempts < _MAX_REQUEST_ATTEMPTS
+                    and _remaining(deadline) > 0
+                ):
+                    break
+                if not await _wait_before_retry(error, route_attempt, deadline):
+                    deadline_expired = True
+                    break
+                continue
+
+            tokens = route_response.usage.total_tokens if route_response.usage else 0
+            latency_ms = _record_attempt(route, attempt_started, tokens=tokens)
+            resp_json = chat_response_to_anthropic(route_response.model_dump())
+
+            if _structured_logger:
+                _structured_logger.log_request(
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=200,
+                    duration_ms=latency_ms,
+                    request_id=request_id,
+                    provider=route.provider_id,
+                    model=route.model_id,
+                )
+
+            return JSONResponse(resp_json)
+
+        if chat_route_error is not None:
+            logger.warning(
+                "Failover (anthropic): %s/%s failed (%s), trying next",
+                route.provider_id,
+                route.model_id,
+                type(chat_route_error).__name__,
+            )
+
+    status_code = _failure_status(last_error, only_timeouts, deadline_expired)
+    if status_code == 504:
+        return JSONResponse(create_anthropic_error(504, "All providers timed out"), status_code=504)
+    return JSONResponse(
+        create_anthropic_error(status_code, f"All providers exhausted for model: {model_input}"),
         status_code=status_code,
     )
 
@@ -922,6 +1237,17 @@ async def metrics_handler(request: Request) -> Response:
     return _metrics_endpoint()
 
 
+async def mcp_endpoint(request: Request) -> JSONResponse:
+    if _mcp_server is None:
+        return JSONResponse({"error": "MCP server not initialized"}, status_code=503)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    response = _mcp_server._handle_request(body)
+    return JSONResponse(response)
+
+
 def create_app(settings: Settings | None = None) -> Starlette:
     global _readiness
 
@@ -939,6 +1265,8 @@ def create_app(settings: Settings | None = None) -> Starlette:
             Route("/readyz", ready_check, methods=["GET"]),
             Route("/stats", stats_endpoint, methods=["GET"]),
             Route("/metrics", metrics_handler, methods=["GET"]),
+            Route("/mcp", mcp_endpoint, methods=["POST"]),
+            Route("/v1/messages", anthropic_messages, methods=["POST"]),
         ],
         lifespan=lifespan,
         middleware=[

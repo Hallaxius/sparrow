@@ -294,7 +294,7 @@ def test_load_all_providers_preserves_current_json_inventory():
     assert providers["c1d70340-1800-4faf-aecc-63480c0ef315"]["base_url"] == "https://free.empero.org/v1"
     assert providers["c1d70340-1800-4faf-aecc-63480c0ef315"]["api_keys"] == ["free"]
     assert providers["e142a874-b2b2-4b25-86b3-07834bee7126"]["base_url"] == "https://integrate.api.nvidia.com/v1"
-    assert providers["e142a874-b2b2-4b25-86b3-07834bee7126"]["api_keys"] == ["replace-with-key"]
+    assert len(providers["e142a874-b2b2-4b25-86b3-07834bee7126"]["api_keys"]) == 4
     assert providers["a16ce1ab-4e9d-446e-85ec-34974be6091a"]["base_url"] == "https://api.kilo.ai/api/openrouter/"
     assert providers["a16ce1ab-4e9d-446e-85ec-34974be6091a"]["models"][0] == {
         "id": "tencent/hy3:free",

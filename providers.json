@@ -83,6 +83,13 @@
     ],
     "mistral-nemo-2407": ["Mistral-Nemo-Instruct-2407", "mistral-Nemo-Instruct-2407"],
     "nvidia-gpt-oss": ["openai/gpt-oss-20b", "openai/gpt-oss-120b"],
-    "nvidia-nemotron-3.5": ["nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b"]
+    "nvidia-nemotron-3.5": ["nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b"],
+    "deepseek-v4-flash": ["deepseek-ai/deepseek-v4-flash-0731", "DeepSeek-V4-Flash-0731"],
+    "step-3.7-flash": ["stepfun-ai/step-3.7-flash", "nvidia/step-3.7-flash"],
+    "laguna-xs-2.1": ["poolside/laguna-xs-2.1", "poolside/laguna-xs-2.1:free"],
+    "nemotron-3-nano-omni-30b": [
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+    ]
   }
 }

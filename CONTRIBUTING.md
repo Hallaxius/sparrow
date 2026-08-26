@@ -82,8 +82,6 @@ Protected API endpoints require `Authorization: Bearer YOUR-KEY`; `X-API-Key` re
 
 Routing supports `fair`, `fast`, `quality`, and `model`. The request model `auto` selects all eligible models. A request is limited to four dispatched attempts and two attempts per route; retryable upstream failures are bounded by the total deadline and `Retry-After`.
 
-The cache is disabled by default and applies only to deterministic, non-streaming chat requests.
-
 ---
 
 ## Code Style

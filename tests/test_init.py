@@ -64,7 +64,7 @@ async def test_run_init_updates_configured_json_and_preserves_metadata(tmp_path,
     write_init_json(tmp_path)
     FakeWARPProxy.stopped = False
     fetch_models = AsyncMock(return_value=[{"id": "alpha-old"}, {"id": "alpha-new"}])
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.init._config_path", lambda: tmp_path / "providers.json")
     monkeypatch.setattr("sparrow.init.WARPProxy", FakeWARPProxy)
     monkeypatch.setattr("sparrow.init.fetch_models_from_provider", fetch_models)
 
@@ -87,7 +87,7 @@ async def test_run_init_updates_configured_json_and_preserves_metadata(tmp_path,
 async def test_run_init_preserves_provider_models_when_refresh_returns_no_models(tmp_path, monkeypatch):
     write_init_json(tmp_path)
     fetch_models = AsyncMock(return_value=[])
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.init._config_path", lambda: tmp_path / "providers.json")
     monkeypatch.setattr("sparrow.init.WARPProxy", FakeWARPProxy)
     monkeypatch.setattr("sparrow.init.fetch_models_from_provider", fetch_models)
 
@@ -107,7 +107,7 @@ async def test_run_init_stops_warp_when_refresh_raises(tmp_path, monkeypatch):
     write_init_json(tmp_path)
     FakeWARPProxy.stopped = False
     fetch_models = AsyncMock(side_effect=RuntimeError("provider exploded"))
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.init._config_path", lambda: tmp_path / "providers.json")
     monkeypatch.setattr("sparrow.init.WARPProxy", FakeWARPProxy)
     monkeypatch.setattr("sparrow.init.fetch_models_from_provider", fetch_models)
 

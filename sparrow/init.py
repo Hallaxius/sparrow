@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from sparrow.config.loader import _load_json, _resolve_config_path, load_config
+from sparrow.config.loader import _config_path, _load_json, load_config
 from sparrow.config.models import Settings
 from sparrow.models.config import ProviderConfig, ProviderModelConfig, ProvidersConfig
 from sparrow.proxy import WARPConfig, WARPProxy
@@ -154,7 +154,7 @@ async def fetch_models_from_provider(
 
 def load_existing_config() -> tuple[Settings, Path, ProvidersConfig]:
     settings = load_config()
-    config_path = _resolve_config_path(settings)
+    config_path = _config_path()
     return settings, config_path, _load_json(config_path)
 
 

@@ -1,6 +1,6 @@
 # @hallaxius/sparrow
 
-**OpenAI-compatible router for keyless free LLM providers — automatic failover, API key management, response caching, and IP rotation via Cloudflare WARP. No upstream API keys required.**
+**OpenAI-compatible router for keyless free LLM providers — automatic failover, API key management, and IP rotation via Cloudflare WARP. No upstream API keys required.**
 
 <p align="center">
   <a href="https://github.com/hallaxius/sparrow"><img src="https://img.shields.io/badge/Python-%E2%89%A53.12-3776AB?logo=python&logoColor=white" alt="Python"></a>
@@ -69,7 +69,6 @@ SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible
 ### Infrastructure
 
 - ✅ **WARP Proxy** — Cloudflare WARP integration for IP rotation
-- ✅ **Response Caching** — optional in-memory cache with configurable TTL
 - ✅ **Request Statistics** — track provider usage, latency, success rates
 - ✅ **Dashboard** — built-in HTML dashboard with live stats
 
@@ -142,7 +141,7 @@ cp .env.example .env
 # Set SPARROW_API_KEY to a long random secret.
 ```
 
-Sparrow starts from the canonical `providers.json` and `models.json` in the repository. Set `SPARROW_CONFIG_FILE` when you need to run with another validated JSON file. `sparrow init` is an explicit refresh command and is never run automatically by the server or entrypoint.
+Sparrow reads `providers.json` and `models.json` from the repository root. `sparrow init` is an explicit refresh command and is never run automatically by the server or entrypoint.
 
 ### 2. Verify provider configuration
 
@@ -273,7 +272,6 @@ Every response includes provider metadata:
 | `SPARROW_PORT` | `8080` | Listen port |
 | `SPARROW_ROUTING` | `fair` | Routing mode (`fair`, `fast`, `quality`, `model`) |
 | `SPARROW_API_KEY` | *(required)* | Single API key accepted through `Authorization: Bearer` or `X-API-Key` |
-| `SPARROW_CONFIG_FILE` | `providers.json` | JSON provider/model configuration file |
 | `SPARROW_WARP_URL` | `socks5://warp:1080` | WARP SOCKS5 proxy URL |
 | `SPARROW_WARP_HTTP_URL` | *(empty)* | Optional HTTP proxy URL for WARP health traffic |
 | `SPARROW_WARP_HEALTH_CHECK_URL` | `https://cloudflare.com/cdn-cgi/trace` | WARP health endpoint |
@@ -282,15 +280,13 @@ Every response includes provider metadata:
 | `WARP_READ_TIMEOUT` | `120` | WARP read timeout (seconds) |
 | `WARP_MAX_CONNECTIONS` | `100` | Maximum WARP connections |
 | `WARP_MAX_KEEPALIVE` | `20` | Maximum WARP keepalive connections |
-| `SPARROW_CACHE_ENABLED` | `false` | Enable deterministic non-streaming chat cache |
-
 Boolean settings accept `true`, `false`, `1`, `0`, `yes`, and `no`.
 
 ---
 
 ## providers.json + models.json
 
-Providers and models are configured in two JSON files. `providers.json` contains provider metadata and aliases, while `models.json` contains model definitions grouped by provider UUID. Sparrow reads these as the runtime provider/model source. Set `SPARROW_CONFIG_FILE` to point at another JSON file for tests or alternate deployments.
+Providers and models are configured in two JSON files. `providers.json` contains provider metadata and aliases, while `models.json` contains model definitions grouped by provider UUID. Sparrow reads these as the runtime provider/model source.
 
 ### Provider entry (providers.json)
 
@@ -352,7 +348,6 @@ sparrow/
 │   ├── app.py              # Starlette application, endpoint handlers
 │   ├── client.py           # Async HTTP client with WARP support
 │   ├── proxy.py            # Cloudflare WARP SOCKS5 proxy manager
-│   ├── cache.py            # In-memory response cache
 │   ├── stats.py            # Request statistics tracker
 │   ├── dashboard.py        # HTML dashboard UI
 │   ├── errors.py           # Exception hierarchy
@@ -425,10 +420,6 @@ Each request has at most four dispatched attempts and at most two attempts on on
 Streaming may retry or fail over before the first event. After the first event, the active route is retained: a failure emits one `upstream_error` event, closes the stream, and never emits a later `DONE` or switches providers.
 
 Daily quota acquisition, request statistics, and breaker state are updated for every dispatched attempt. Circuit breakers allow exactly one half-open probe after recovery.
-
-### Cache contracts
-
-The in-memory cache is disabled by default and is used only for deterministic, non-streaming chat requests without tools, tool choice, or response format. Cache keys include normalized request data, provider/model, and authenticated scope. Embeddings, streaming, errors, and non-deterministic requests bypass the cache.
 
 ---
 

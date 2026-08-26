@@ -36,15 +36,15 @@ def bash_path(path: Path) -> str:
 
 
 def run_entrypoint(
-    tmp_path: Path, config_file: Path | None = None, api_key: str | None = None
+    tmp_path: Path, api_key: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash is required to exercise entrypoint.sh")
     app_dir = tmp_path / "app"
     bin_dir = tmp_path / "bin"
-    app_dir.mkdir()
-    bin_dir.mkdir()
+    app_dir.mkdir(exist_ok=True)
+    bin_dir.mkdir(exist_ok=True)
     write_uv_stub(bin_dir)
     env = os.environ.copy()
     if api_key is None:
@@ -53,8 +53,6 @@ def run_entrypoint(
         f'PATH={shlex.quote(bash_path(bin_dir))}:"$PATH"',
         f"SPARROW_APP_DIR={shlex.quote(bash_path(app_dir))}",
     ]
-    if config_file is not None:
-        command_parts.append(f"SPARROW_CONFIG_FILE={shlex.quote(bash_path(config_file))}")
     if api_key is not None:
         command_parts.append(f"SPARROW_API_KEY={shlex.quote(api_key)}")
     command_parts.append(shlex.quote(bash_path(PROJECT_ROOT / "entrypoint.sh")))
@@ -68,9 +66,7 @@ def run_entrypoint(
 
 
 def test_entrypoint_fails_when_configured_json_is_missing(tmp_path):
-    config_file = tmp_path / "missing.json"
-
-    result = run_entrypoint(tmp_path, config_file)
+    result = run_entrypoint(tmp_path)
 
     assert result.returncode != 0
     assert "configuration file not found" in result.stderr
@@ -79,12 +75,14 @@ def test_entrypoint_fails_when_configured_json_is_missing(tmp_path):
 
 
 def test_entrypoint_starts_server_when_configured_json_exists(tmp_path):
-    providers_file = tmp_path / "providers.json"
-    models_file = tmp_path / "models.json"
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    providers_file = app_dir / "providers.json"
+    models_file = app_dir / "models.json"
     providers_file.write_text('{"providers": {"p1": {"name": "P1", "base_url": "https://x.com/v1", "adapter": "openai", "auth": "none"}}, "aliases": {}}', encoding="utf-8")
     models_file.write_text('{"p1": [{"id": "m1", "name": "M1", "context": 128000, "quality": 5, "enabled": true}]}', encoding="utf-8")
 
-    result = run_entrypoint(tmp_path, providers_file, api_key="test-key")
+    result = run_entrypoint(tmp_path, api_key="test-key")
 
     assert result.returncode == 0
     assert result.stdout.splitlines()[-4:] == ["run", "python", "-m", "sparrow"]
@@ -92,12 +90,14 @@ def test_entrypoint_starts_server_when_configured_json_exists(tmp_path):
 
 
 def test_entrypoint_fails_when_api_key_is_missing(tmp_path):
-    providers_file = tmp_path / "providers.json"
-    models_file = tmp_path / "models.json"
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    providers_file = app_dir / "providers.json"
+    models_file = app_dir / "models.json"
     providers_file.write_text('{"providers": {"p1": {"name": "P1", "base_url": "https://x.com/v1", "adapter": "openai", "auth": "none"}}, "aliases": {}}', encoding="utf-8")
     models_file.write_text('{"p1": [{"id": "m1", "name": "M1", "context": 128000, "quality": 5, "enabled": true}]}', encoding="utf-8")
 
-    result = run_entrypoint(tmp_path, providers_file)
+    result = run_entrypoint(tmp_path)
 
     assert result.returncode != 0
     assert "SPARROW_API_KEY is required" in result.stderr

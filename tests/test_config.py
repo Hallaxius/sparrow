@@ -50,7 +50,7 @@ def test_load_all_providers_uses_env_json_with_aliases_and_quota(tmp_path, monke
     }
     aliases = {"best-free": "beta/beta-accurate"}
     write_config(tmp_path, providers, aliases, models)
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: tmp_path / "providers.json")
 
     data = load_all_providers()
     provider_id, _separator, model_id = data["aliases"]["best-free"].partition("/")
@@ -99,13 +99,9 @@ def test_settings_reject_invalid_routing_mode(routing):
         Settings(routing=routing)
 
 
-def test_settings_disable_cache_by_default():
-    assert Settings().cache_enabled is False
-
-
-def test_load_all_providers_rejects_missing_env_config(tmp_path, monkeypatch):
+def test_load_all_providers_rejects_missing_config(tmp_path, monkeypatch):
     missing_path = tmp_path / "missing"
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(missing_path))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: missing_path)
 
     with pytest.raises(ConfigurationFileError, match="file does not exist"):
         load_all_providers()
@@ -116,7 +112,7 @@ def test_load_all_providers_rejects_invalid_json(tmp_path, monkeypatch):
     config_path.write_text("{invalid json", encoding="utf-8")
     models_path = tmp_path / "models.json"
     models_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(config_path))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: config_path)
 
     with pytest.raises(ConfigurationFileError, match="invalid JSON"):
         load_all_providers()
@@ -136,7 +132,7 @@ def test_load_all_providers_rejects_invalid_alias_target(tmp_path, monkeypatch):
     }
     aliases = {"best-free": "missing/alpha-fast"}
     write_config(tmp_path, providers, aliases, models)
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: tmp_path / "providers.json")
 
     with pytest.raises(ConfigurationFileError, match="provider/model"):
         load_all_providers()
@@ -155,7 +151,7 @@ def test_load_all_providers_rejects_invalid_url(tmp_path, monkeypatch):
         ],
     }
     write_config(tmp_path, providers, models=models)
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: tmp_path / "providers.json")
 
     with pytest.raises(ConfigurationFileError, match="base_url"):
         load_all_providers()
@@ -174,7 +170,7 @@ def test_load_all_providers_rejects_provider_without_enabled_model(tmp_path, mon
         ],
     }
     write_config(tmp_path, providers, models=models)
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: tmp_path / "providers.json")
 
     with pytest.raises(ConfigurationFileError, match="enabled model"):
         load_all_providers()
@@ -194,7 +190,7 @@ def test_load_all_providers_rejects_unknown_alias_model(tmp_path, monkeypatch):
     }
     aliases = {"best-free": "alpha/beta-fast"}
     write_config(tmp_path, providers, aliases, models)
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: tmp_path / "providers.json")
 
     with pytest.raises(ConfigurationFileError, match="unknown model"):
         load_all_providers()
@@ -214,7 +210,7 @@ def test_load_all_providers_rejects_malformed_alias(tmp_path, monkeypatch):
     }
     aliases = {"best-free": "alpha-fast"}
     write_config(tmp_path, providers, aliases, models)
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: tmp_path / "providers.json")
 
     with pytest.raises(ConfigurationFileError, match="provider/model"):
         load_all_providers()
@@ -231,7 +227,7 @@ def test_load_all_providers_returns_model_groups(tmp_path, monkeypatch):
     }
     model_groups = {"hy3": ["hy3-free", "tencent/hy3:free"]}
     write_config(tmp_path, providers, models=models, model_groups=model_groups)
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: tmp_path / "providers.json")
 
     data = load_all_providers()
 
@@ -247,7 +243,7 @@ def test_load_all_providers_rejects_group_with_unknown_model(tmp_path, monkeypat
     }
     model_groups = {"fast": ["alpha-fast", "ghost-model"]}
     write_config(tmp_path, providers, models=models, model_groups=model_groups)
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: tmp_path / "providers.json")
 
     with pytest.raises(ConfigurationFileError, match="unknown models"):
         load_all_providers()
@@ -262,7 +258,7 @@ def test_load_all_providers_rejects_single_member_group(tmp_path, monkeypatch):
     }
     model_groups = {"fast": ["alpha-fast"]}
     write_config(tmp_path, providers, models=models, model_groups=model_groups)
-    monkeypatch.setenv("SPARROW_CONFIG_FILE", str(tmp_path / "providers.json"))
+    monkeypatch.setattr("sparrow.config.loader._config_path", lambda: tmp_path / "providers.json")
 
     with pytest.raises(ConfigurationFileError, match="at least two"):
         load_all_providers()
@@ -283,13 +279,13 @@ def test_load_all_providers_preserves_current_json_inventory():
         "f3100559-d247-449a-baa1-5092dc4fcf6c",
     ]
     assert {provider_id: len(provider["models"]) for provider_id, provider in providers.items()} == {
-        "1321946a-0d1a-4c00-882e-c626e19047e5": 5,
-        "17b72315-1e87-4a43-b86d-e455bfe57051": 4,
-        "a16ce1ab-4e9d-446e-85ec-34974be6091a": 16,
-        "c193adf9-0783-40fa-a892-3ad8463a2fb6": 13,
-        "c1d70340-1800-4faf-aecc-63480c0ef315": 1,
-        "e142a874-b2b2-4b25-86b3-07834bee7126": 11,
-        "f3100559-d247-449a-baa1-5092dc4fcf6c": 6,
+        "1321946a-0d1a-4c00-882e-c626e19047e5": 7,
+        "17b72315-1e87-4a43-b86d-e455bfe57051": 6,
+        "a16ce1ab-4e9d-446e-85ec-34974be6091a": 18,
+        "c193adf9-0783-40fa-a892-3ad8463a2fb6": 15,
+        "c1d70340-1800-4faf-aecc-63480c0ef315": 3,
+        "e142a874-b2b2-4b25-86b3-07834bee7126": 13,
+        "f3100559-d247-449a-baa1-5092dc4fcf6c": 8,
     }
     assert providers["c1d70340-1800-4faf-aecc-63480c0ef315"]["base_url"] == "https://free.empero.org/v1"
     assert providers["c1d70340-1800-4faf-aecc-63480c0ef315"]["api_keys"] == ["free"]
@@ -311,7 +307,6 @@ def test_load_config():
     assert config.host == "0.0.0.0"
     assert config.port == 8080
     assert config.routing == "fair"
-    assert config.cache_enabled is False
 
 
 def test_load_all_providers():

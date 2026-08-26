@@ -10,7 +10,6 @@ def test_readme_matches_runtime_contracts():
         "/readyz",
         "Authorization: Bearer",
         "X-API-Key",
-        "SPARROW_CACHE_ENABLED",
     ):
         assert required in readme
 

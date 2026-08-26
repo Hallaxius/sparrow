@@ -35,7 +35,10 @@
       "base_url": "https://free.empero.org/v1",
       "adapter": "openai",
       "auth": "bearer",
-      "api_key": "free"
+      "api_key": "free",
+      "api_keys": [
+        "free"
+      ]
     },
     "e142a874-b2b2-4b25-86b3-07834bee7126": {
       "name": "NVIDIA",
@@ -70,26 +73,5 @@
     "nvidia-nemotron-3-ultra-550b": "e142a874-b2b2-4b25-86b3-07834bee7126/nvidia/nemotron-3-ultra-550b-a55b",
     "nvidia-step-3.7-flash": "e142a874-b2b2-4b25-86b3-07834bee7126/stepfun-ai/step-3.7-flash",
     "nvidia-nemotron-3-nano-omni": "e142a874-b2b2-4b25-86b3-07834bee7126/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
-  },
-  "model_groups": {
-    "hy3": ["hy3-free", "tencent/hy3:free"],
-    "nemotron-3-ultra": ["nemotron-3-ultra-free", "nvidia/nemotron-3-ultra-550b-a55b:free"],
-    "laguna-s-2.1": ["laguna-s-2.1-free", "poolside/laguna-s-2.1:free"],
-    "nemotron-3.5-lightning": ["nemotron-3.5-lightning-free", "nvidia/nemotron-3.5-lightning:free"],
-    "step-3.7-flash": ["nvidia/step-3.7-flash", "stepfun/step-3.7-flash:free"],
-    "nemotron-3-nano-omni-30b": [
-      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
-    ],
-    "mistral-nemo-2407": ["Mistral-Nemo-Instruct-2407", "mistral-Nemo-Instruct-2407"],
-    "nvidia-gpt-oss": ["openai/gpt-oss-20b", "openai/gpt-oss-120b"],
-    "nvidia-nemotron-3.5": ["nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b"],
-    "deepseek-v4-flash": ["deepseek-ai/deepseek-v4-flash-0731", "DeepSeek-V4-Flash-0731"],
-    "step-3.7-flash": ["stepfun-ai/step-3.7-flash", "nvidia/step-3.7-flash"],
-    "laguna-xs-2.1": ["poolside/laguna-xs-2.1", "poolside/laguna-xs-2.1:free"],
-    "nemotron-3-nano-omni-30b": [
-      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
-    ]
   }
 }

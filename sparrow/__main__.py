@@ -50,7 +50,7 @@ def run_status() -> None:
 
 def run_config() -> None:
     try:
-        config = load_config()
+        load_config()
         runtime = load_all_providers()
     except Exception as error:
         print(f"error: {error}")

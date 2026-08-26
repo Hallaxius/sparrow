@@ -20,7 +20,6 @@ def test_dockerfile_uses_pinned_images_and_json_config():
 def test_compose_requires_json_key_warp_and_readiness_healthcheck():
     compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
-    assert "SPARROW_CONFIG_FILE: /app/providers.json" in compose
     assert 'SPARROW_API_KEY: "${SPARROW_API_KEY:?SPARROW_API_KEY must be set}"' in compose
     assert 'test: ["CMD", "curl", "-fsS", "http://localhost:8080/readyz"]' in compose
     assert "condition: service_healthy" in compose
@@ -35,5 +34,3 @@ def test_env_example_declares_operational_defaults_without_secret():
     env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
 
     assert "SPARROW_API_KEY=replace-with-a-long-random-secret" in env_example
-    assert "SPARROW_CONFIG_FILE=providers.json" in env_example
-    assert "SPARROW_CACHE_ENABLED=false" in env_example

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -53,10 +52,6 @@ class Settings(BaseSettings):
     port: int = Field(default=8080, alias="SPARROW_PORT")
     routing: str = Field(default="fair", alias="SPARROW_ROUTING")
     cooldown_seconds: int = Field(default=60, alias="SPARROW_COOLDOWN")
-    cache_enabled: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("SPARROW_CACHE_ENABLED", "cache_enabled"),
-    )
 
     warp_proxy_url: str = Field(
         default="socks5://warp:1080",
@@ -101,17 +96,11 @@ class Settings(BaseSettings):
     )
 
     api_key: str = Field(default="", alias="SPARROW_API_KEY")
-    config_file: Path = Field(default=Path("providers.json"), alias="SPARROW_CONFIG_FILE")
 
     @field_validator("routing", mode="before")
     @classmethod
     def validate_routing(cls, value: Any) -> str:
         return _parse_routing(value)
-
-    @field_validator("cache_enabled", mode="before")
-    @classmethod
-    def validate_cache_enabled(cls, value: Any) -> bool:
-        return _parse_warp_enabled(value)
 
     @field_validator("warp_proxy_url")
     @classmethod

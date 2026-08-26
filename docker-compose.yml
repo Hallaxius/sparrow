@@ -10,7 +10,6 @@ services:
       SPARROW_HOST: 0.0.0.0
       SPARROW_PORT: "8080"
       SPARROW_ROUTING: fair
-      SPARROW_CONFIG_FILE: /app/providers.json
       SPARROW_API_KEY: "${SPARROW_API_KEY:?SPARROW_API_KEY must be set}"
       WARP_HEALTH_INTERVAL: "60"
       WARP_CONNECT_TIMEOUT: "10"

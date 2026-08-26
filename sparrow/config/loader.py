@@ -16,11 +16,8 @@ def load_config() -> Settings:
     return Settings()
 
 
-def _resolve_config_path(settings: Settings) -> Path:
-    config_file = settings.config_file
-    if config_file.is_absolute():
-        return config_file
-    return PROJECT_ROOT / config_file
+def _config_path() -> Path:
+    return PROJECT_ROOT / "providers.json"
 
 
 def _validation_reason(error: ValidationError) -> str:
@@ -64,6 +61,4 @@ def _load_json(path: Path) -> ProvidersConfig:
 
 
 def load_all_providers() -> ProvidersRuntime:
-    settings = load_config()
-    config_path = _resolve_config_path(settings)
-    return _load_json(config_path).to_runtime()
+    return _load_json(_config_path()).to_runtime()

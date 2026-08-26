@@ -56,11 +56,9 @@ def run_config() -> None:
         print(f"error: {error}")
         raise SystemExit(1) from None
 
-    config_path = config.config_file
-    if not config_path.is_absolute():
-        from sparrow.config.loader import PROJECT_ROOT
+    from sparrow.config.loader import PROJECT_ROOT
 
-        config_path = PROJECT_ROOT / config_path
+    config_path = PROJECT_ROOT / "providers.json"
 
     print("SparroW configuration")
     print(f"  config_file: {config_path}")

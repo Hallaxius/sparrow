@@ -29,7 +29,6 @@ from sparrow.adapters.anthropic_shim import (
 )
 from sparrow.adapters.base import ProviderAdapter
 from sparrow.adapters.registry import AdapterRegistry
-from sparrow.cache import ResponseCache
 from sparrow.client import SparrowClient
 from sparrow.config.aliases import AliasResolutionError, AliasResolver
 from sparrow.config.loader import load_all_providers, load_config
@@ -38,7 +37,7 @@ from sparrow.dashboard import DASHBOARD_HTML
 from sparrow.errors import ConfigError
 from sparrow.mcp_server import MCPServer
 from sparrow.metrics import metrics_endpoint as _metrics_endpoint
-from sparrow.metrics import record_cache_hit, record_cache_miss, record_request
+from sparrow.metrics import record_request
 from sparrow.middleware.auth import AuthMiddleware, get_api_key_auth
 from sparrow.middleware.body_limit import BodySizeLimitMiddleware
 from sparrow.middleware.logging import StructuredLogger, generate_request_id
@@ -82,7 +81,6 @@ _routing_engine: RoutingEngine | None = None
 _alias_resolver: AliasResolver | None = None
 _stats: StatsTracker | None = None
 _adapter_registry: AdapterRegistry | None = None
-_cache: ResponseCache | None = None
 _quota: QuotaTracker | None = None
 _rpm_governor: RpmGovernor | None = None
 _health: RouteHealthTracker | None = None
@@ -190,23 +188,6 @@ def _metadata_headers(provider_id: str, model_id: str) -> dict[str, str]:
         "X-Sparrow-Provider": provider_id,
         "X-Sparrow-Model": model_id,
     }
-
-
-def _is_cacheable_chat(request: ChatRequest) -> bool:
-    return (
-        not request.stream
-        and request.tools is None
-        and request.tool_choice is None
-        and request.response_format is None
-        and request.temperature in {None, 0}
-        and request.top_p in {None, 1}
-        and request.frequency_penalty in {None, 0}
-        and request.presence_penalty in {None, 0}
-    )
-
-
-def _cache_scope(request: Request) -> str:
-    return str(getattr(request.state, "api_key", None) or "anonymous")
 
 
 def _remaining(deadline: float) -> float:
@@ -381,7 +362,6 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         _stats, \
         _adapter_registry, \
         _start_time, \
-        _cache, \
         _quota, \
         _health, \
         _structured_logger, \
@@ -397,7 +377,6 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
     _alias_resolver = None
     _stats = None
     _adapter_registry = None
-    _cache = None
     _quota = None
     _rpm_governor = None
     _health = None
@@ -415,7 +394,6 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         settings = load_config()
         _stats = StatsTracker()
         _structured_logger = StructuredLogger()
-        _cache = ResponseCache() if settings.cache_enabled else None
         _quota = QuotaTracker()
         _rpm_governor = RpmGovernor()
         _health = RouteHealthTracker(persist_path=".sparrow/circuit_breakers.json")
@@ -520,7 +498,6 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
             _health = None
             _quota = None
             _rpm_governor = None
-            _cache = None
             _structured_logger = None
             _capability_scorer = None
             _context_learner = None
@@ -622,9 +599,6 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
 
     model_input = chat_req.model
     max_tokens = chat_req.max_tokens
-    cache_body = chat_req.model_dump(exclude_none=True)
-    cacheable = _cache is not None and _is_cacheable_chat(chat_req)
-    cache_scope = _cache_scope(request) if cacheable else "anonymous"
 
     if _routing_engine is None or _alias_resolver is None:
         return JSONResponse({"error": "Routing engine not initialized"}, status_code=500)
@@ -798,13 +772,6 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
         if adapter is None:
             continue
 
-        if cacheable and _cache:
-            cached = _cache.get(route.provider_id, route.model_id, cache_body, scope=cache_scope)
-            if cached is not None:
-                record_cache_hit(route.provider_id)
-                return JSONResponse(cached, headers=_metadata_headers(route.provider_id, route.model_id))
-            record_cache_miss(route.provider_id)
-
         chat_req.model = route.model_id
         chat_route_error: Exception | None = None
 
@@ -852,9 +819,6 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
             registry = _plugin_registry
             if registry is not None:
                 resp_json = await registry.run_response_hooks(resp_json)
-
-            if cacheable and _cache and route_response.choices:
-                _cache.set(route.provider_id, route.model_id, cache_body, resp_json, scope=cache_scope)
 
             if _structured_logger:
                 _structured_logger.log_request(

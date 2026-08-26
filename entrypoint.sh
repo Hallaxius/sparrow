@@ -4,8 +4,8 @@ set -euo pipefail
 echo "Starting SparroW..."
 
 APP_DIR="${SPARROW_APP_DIR:-/app}"
-CONFIG_FILE="${SPARROW_CONFIG_FILE:-$APP_DIR/providers.json}"
-MODELS_FILE="${CONFIG_FILE%/*}/models.json"
+CONFIG_FILE="$APP_DIR/providers.json"
+MODELS_FILE="$APP_DIR/models.json"
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "providers.json configuration file not found: $CONFIG_FILE" >&2

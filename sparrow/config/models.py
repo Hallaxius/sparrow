@@ -7,20 +7,6 @@ from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-def _parse_warp_enabled(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int) and value in (0, 1):
-        return bool(value)
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes"}:
-            return True
-        if normalized in {"false", "0", "no"}:
-            return False
-    raise ValueError("expected one of: true, false, 1, 0, yes, no")
-
-
 def _parse_routing(value: Any) -> str:
     if isinstance(value, str):
         normalized = value.strip().lower()

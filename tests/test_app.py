@@ -64,21 +64,16 @@ async def test_readiness_requires_an_enabled_route(app, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_readiness_reports_unavailable_required_warp(app, monkeypatch):
+async def test_readiness_passes_when_warp_unavailable(app, monkeypatch):
     monkeypatch.setattr(app_module, "load_config", lambda: Settings())
-    monkeypatch.setattr("sparrow.proxy.check_warp_reachable", lambda proxy_url: _unreachable_warp())
 
     async with lifespan(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/readyz")
 
-    assert response.status_code == 503
-    assert response.json()["reason"] == "warp_unavailable"
-
-
-async def _unreachable_warp() -> bool:
-    return False
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
 
 
 @pytest.mark.asyncio

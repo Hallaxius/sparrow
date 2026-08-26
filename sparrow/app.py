@@ -129,9 +129,6 @@ def _compute_readiness() -> ReadinessState:
     if _routing_engine.route_count == 0:
         return ReadinessState(ready=False, reason="no_routes")
 
-    if _client is None or not _client.warp.is_warp_available():
-        return ReadinessState(ready=False, reason="warp_unavailable")
-
     return ReadinessState(ready=True, reason="ready")
 
 

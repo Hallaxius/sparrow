@@ -84,7 +84,7 @@ class WARPProxy:
         else:
             logger.info("WARP proxy started: %s", self.config.proxy_url)
 
-        if self.config.health_check_interval > 0:
+        if self._warp_available and self.config.health_check_interval > 0:
             self._health_task = asyncio.create_task(self._health_loop())
 
     def is_warp_available(self) -> bool:

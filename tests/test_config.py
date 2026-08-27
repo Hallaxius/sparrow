@@ -316,6 +316,13 @@ def test_settings_use_railway_port_when_sparrow_port_is_unset(monkeypatch):
     assert Settings().port == 9123
 
 
+def test_settings_accept_authenticated_warp_proxy_url(monkeypatch):
+    proxy_url = "socks5://proxy-user:proxy-password@proxy.example:15140"
+    monkeypatch.setenv("SPARROW_WARP_URL", proxy_url)
+
+    assert Settings().warp_proxy_url == proxy_url
+
+
 def test_settings_keep_local_warp_fallback_by_default():
     settings = Settings()
 

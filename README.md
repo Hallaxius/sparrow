@@ -163,6 +163,13 @@ docker compose up -d --build
 
 The app-only Compose configuration points to `socks5://host.docker.internal:1080` by default. Keep `SPARROW_WARP_REQUIRED=false` for direct fallback, or set it to `true` after the WARP service is ready.
 
+For a WARP service reached through a public TCP proxy, use the generated host and port with WireProxy credentials:
+
+```text
+SPARROW_WARP_REQUIRED=true
+SPARROW_WARP_URL=socks5://USERNAME:PASSWORD@proxy-host:proxy-port
+```
+
 ### 4. Start Sparrow
 
 ```bash
@@ -288,7 +295,7 @@ Every response includes provider metadata:
 | `SPARROW_PORT` | `8080` | Listen port; takes precedence over `PORT` |
 | `SPARROW_ROUTING` | `fair` | Routing mode (`fair`, `fast`, `quality`, `model`) |
 | `SPARROW_API_KEY` | *(required)* | Single API key accepted through `Authorization: Bearer` or `X-API-Key` |
-| `SPARROW_WARP_URL` | `socks5://warp:1080` | WARP SOCKS5 proxy URL |
+| `SPARROW_WARP_URL` | `socks5://warp:1080` | WARP SOCKS5 proxy URL; supports `socks5://USER:PASSWORD@HOST:PORT` |
 | `SPARROW_WARP_REQUIRED` | `false` | Require an available WARP proxy before readiness and provider requests |
 | `SPARROW_WARP_HTTP_URL` | *(empty)* | Optional HTTP proxy URL for WARP health traffic |
 | `SPARROW_WARP_HEALTH_CHECK_URL` | `https://cloudflare.com/cdn-cgi/trace` | WARP health endpoint |
@@ -306,11 +313,11 @@ Boolean settings accept `true`, `false`, `1`, `0`, `yes`, and `no`.
 
 ### Railway deployment
 
-Deploy Sparrow and WARP as separate services in the same Railway project and environment. Railway private DNS is scoped to that environment and uses the service private domain, for example `warp.railway.internal` when the service is actually named `warp`.
+Deploy Sparrow and WARP as separate services. When they share a Railway project and environment, use Railway private networking and the WARP private domain, for example `warp.railway.internal` when the service is actually named `warp`. When they are in different projects or platforms, expose only the WARP SOCKS5 listener through a Railway TCP Proxy and use its generated public host and port.
 
-The Sparrow service must listen on Railway's `PORT` value. Leave `SPARROW_PORT` unset in Railway unless an explicit override is required. Set `SPARROW_WARP_REQUIRED=true` and set `SPARROW_WARP_URL` to the actual private SOCKS5 address exposed by the WARP service. The WARP service must listen on `0.0.0.0:1080` so Sparrow can reach it through private networking.
+The Sparrow service must listen on Railway's `PORT` value. Leave `SPARROW_PORT` unset in Railway unless an explicit override is required. Set `SPARROW_WARP_REQUIRED=true` and set `SPARROW_WARP_URL` to either `socks5://<warp-private-domain>:1080` or `socks5://USERNAME:PASSWORD@<tcp-proxy-host>:<tcp-proxy-port>`. The WARP service must listen on `0.0.0.0:1080` for SOCKS5 and use a separate `PORT` for its HTTP health interface.
 
-The Compose `depends_on` health condition applies only to local Docker Compose. Railway services start independently, so Sparrow uses the bounded WARP startup wait and `/readyz` remains `503` until required WARP is available. `/healthz` remains a liveness check and does not prove provider connectivity.
+The Compose `depends_on` health condition applies only to local Docker Compose. Railway services start independently, so Sparrow uses the bounded WARP startup wait and `/readyz` remains `503` until required WARP is available. `/healthz` remains a liveness check and does not prove provider connectivity. Railway TCP Proxy does not authenticate SOCKS5 traffic, so public WARP deployments must enable WireProxy username/password authentication.
 
 ---
 

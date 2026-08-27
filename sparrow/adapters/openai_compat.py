@@ -61,6 +61,9 @@ class OpenAICompatAdapter:
             self._chat_path = "/chat/completions"
             self._extra_headers = {}
 
+    def set_client(self, client: httpx.AsyncClient) -> None:
+        self._client = client
+
     def rotate_key(self) -> None:
         if self._key_cycle is not None:
             next(self._key_cycle)

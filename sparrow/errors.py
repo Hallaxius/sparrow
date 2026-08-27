@@ -7,6 +7,11 @@ class SparrowError(Exception):
     pass
 
 
+class WARPUnavailableError(SparrowError):
+    def __init__(self) -> None:
+        super().__init__("Required WARP proxy is unavailable")
+
+
 class AllProvidersExhaustedError(SparrowError):
     def __init__(self, model: str) -> None:
         self.model = model

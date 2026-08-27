@@ -34,7 +34,7 @@ from sparrow.config.aliases import AliasResolutionError, AliasResolver
 from sparrow.config.loader import load_all_providers, load_config
 from sparrow.config.models import Settings
 from sparrow.dashboard import DASHBOARD_HTML
-from sparrow.errors import ConfigError
+from sparrow.errors import ConfigError, WARPUnavailableError
 from sparrow.mcp_server import MCPServer
 from sparrow.metrics import metrics_endpoint as _metrics_endpoint
 from sparrow.metrics import record_request
@@ -55,13 +55,17 @@ from sparrow.stats import StatsTracker
 
 logger = logging.getLogger("sparrow")
 
-_MAX_REQUEST_ATTEMPTS = 4
-_MAX_ROUTE_ATTEMPTS = 2
-_REQUEST_DEADLINE_SECONDS = 120.0
-_STREAM_IDLE_TIMEOUT_SECONDS = 120.0
+_MAX_REQUEST_ATTEMPTS: int = 4
+_MAX_ROUTE_ATTEMPTS: int = 2
+_REQUEST_DEADLINE_SECONDS: float = 120.0
+_STREAM_IDLE_TIMEOUT_SECONDS: float = 120.0
 _RETRY_BASE_DELAY = 1.0
 _RETRY_MAX_DELAY = 10.0
 _RETRY_BACKOFF_FACTOR = 2.0
+_DEFAULT_MAX_REQUEST_ATTEMPTS: int = _MAX_REQUEST_ATTEMPTS
+_DEFAULT_MAX_ROUTE_ATTEMPTS: int = _MAX_ROUTE_ATTEMPTS
+_DEFAULT_REQUEST_DEADLINE_SECONDS: float = _REQUEST_DEADLINE_SECONDS
+_DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS: float = _STREAM_IDLE_TIMEOUT_SECONDS
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -89,6 +93,7 @@ _capability_scorer: CapabilityScorer | None = None
 _context_learner: ContextWindowLearner | None = None
 _mcp_server: MCPServer | None = None
 _plugin_registry: PluginRegistry | None = None
+_settings: Settings | None = None
 _start_time: float = 0.0
 
 
@@ -129,6 +134,9 @@ def _compute_readiness() -> ReadinessState:
     if _routing_engine.route_count == 0:
         return ReadinessState(ready=False, reason="no_routes")
 
+    if _settings is not None and _settings.warp_required and not _client.warp.is_warp_available():
+        return ReadinessState(ready=False, reason="warp_unavailable")
+
     return ReadinessState(ready=True, reason="ready")
 
 
@@ -139,6 +147,7 @@ def _readiness_payload() -> dict[str, object]:
         "warp_enabled": True,
         "warp_available": False,
     }
+    warp_required = _settings.warp_required if _settings is not None else False
     if _client:
         warp_status = _client.warp.get_status()
 
@@ -148,8 +157,48 @@ def _readiness_payload() -> dict[str, object]:
         "reason": _readiness.reason,
         "routes": routes,
         "providers": providers,
+        "warp_required": warp_required,
         **warp_status,
     }
+
+
+def _refresh_adapter_client() -> None:
+    if _client is None or _adapter_registry is None or not isinstance(_adapter_registry, AdapterRegistry):
+        return
+
+    require_warp = _settings.warp_required if _settings is not None else False
+    client = _client.get_client(use_warp=True, require_warp=require_warp)
+    _adapter_registry.set_client(client)
+
+
+def _apply_runtime_settings(settings: Settings) -> None:
+    global _MAX_REQUEST_ATTEMPTS, _MAX_ROUTE_ATTEMPTS, _REQUEST_DEADLINE_SECONDS, _STREAM_IDLE_TIMEOUT_SECONDS
+
+    if _MAX_REQUEST_ATTEMPTS == _DEFAULT_MAX_REQUEST_ATTEMPTS:
+        _MAX_REQUEST_ATTEMPTS = settings.max_request_attempts
+    if _MAX_ROUTE_ATTEMPTS == _DEFAULT_MAX_ROUTE_ATTEMPTS:
+        _MAX_ROUTE_ATTEMPTS = settings.max_route_attempts
+    if _REQUEST_DEADLINE_SECONDS == _DEFAULT_REQUEST_DEADLINE_SECONDS:
+        _REQUEST_DEADLINE_SECONDS = settings.request_deadline_seconds
+    if _STREAM_IDLE_TIMEOUT_SECONDS == _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS:
+        _STREAM_IDLE_TIMEOUT_SECONDS = settings.request_deadline_seconds
+
+
+def _reset_runtime_settings() -> None:
+    global _MAX_REQUEST_ATTEMPTS, _MAX_ROUTE_ATTEMPTS, _REQUEST_DEADLINE_SECONDS, _STREAM_IDLE_TIMEOUT_SECONDS
+
+    _MAX_REQUEST_ATTEMPTS = _DEFAULT_MAX_REQUEST_ATTEMPTS
+    _MAX_ROUTE_ATTEMPTS = _DEFAULT_MAX_ROUTE_ATTEMPTS
+    _REQUEST_DEADLINE_SECONDS = _DEFAULT_REQUEST_DEADLINE_SECONDS
+    _STREAM_IDLE_TIMEOUT_SECONDS = _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS
+
+
+def _warp_unavailable_response(error: WARPUnavailableError) -> JSONResponse:
+    return JSONResponse({"error": str(error)}, status_code=503)
+
+
+def _anthropic_warp_unavailable_response(error: WARPUnavailableError) -> JSONResponse:
+    return JSONResponse(create_anthropic_error(503, str(error)), status_code=503)
 
 
 def _invalid_request_response(
@@ -236,6 +285,28 @@ def _attempt_status(error: Exception | None) -> str:
     if isinstance(error, httpx.TransportError):
         return "transport_error"
     return "error"
+
+
+def _log_upstream_error(
+    error: Exception,
+    request_id: str,
+    method: str,
+    path: str,
+    provider: str,
+    model: str,
+) -> None:
+    if _structured_logger is None:
+        return
+    _structured_logger.log_error(
+        message="Upstream request failed",
+        request_id=request_id,
+        method=method,
+        path=path,
+        provider=provider,
+        model=model,
+        status_code=_error_status(error),
+        error_type=type(error).__name__,
+    )
 
 
 def _retry_after_seconds(error: Exception) -> float | None:
@@ -367,6 +438,11 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         _mcp_server, \
         _plugin_registry, \
         _rpm_governor, \
+        _settings, \
+        _MAX_REQUEST_ATTEMPTS, \
+        _MAX_ROUTE_ATTEMPTS, \
+        _REQUEST_DEADLINE_SECONDS, \
+        _STREAM_IDLE_TIMEOUT_SECONDS, \
         _readiness
 
     _client = None
@@ -382,6 +458,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
     _context_learner = None
     _mcp_server = None
     _plugin_registry = None
+    _settings = None
     _start_time = time.time()
     _readiness = ReadinessState(ready=False, reason="startup_incomplete")
     startup_failed = False
@@ -389,6 +466,8 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
 
     try:
         settings = load_config()
+        _settings = settings
+        _apply_runtime_settings(settings)
         _stats = StatsTracker()
         _structured_logger = StructuredLogger()
         _quota = QuotaTracker()
@@ -409,9 +488,20 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         warp = WARPProxy(WARPConfig.from_settings(settings))
         _client = SparrowClient(warp_proxy=warp)
         await _client.start()
+        if settings.warp_required:
+            available = await _client.warp.wait_until_available(
+                timeout=settings.warp_startup_timeout,
+                retry_interval=settings.warp_startup_retry_interval,
+            )
+            if not available:
+                logger.warning("Required WARP is unavailable; readiness will remain false")
 
         _adapter_registry = AdapterRegistry()
-        _adapter_registry.set_client(_client.get_client(use_warp=True))
+        try:
+            initial_client = _client.get_client(use_warp=True, require_warp=settings.warp_required)
+        except WARPUnavailableError:
+            initial_client = _client.get_client(use_warp=False)
+        _adapter_registry.set_client(initial_client)
 
         _alias_resolver = AliasResolver(
             aliases=providers_data.get("aliases", {}),
@@ -501,6 +591,8 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
             _mcp_server = None
             _plugin_registry = None
             _stats = None
+            _settings = None
+            _reset_runtime_settings()
             _start_time = 0.0
             get_api_key_auth().set_keys(None)
             if not startup_failed:
@@ -616,6 +708,12 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
     if _adapter_registry is None:
         return JSONResponse({"error": "Adapter registry not initialized"}, status_code=500)
 
+    try:
+        _refresh_adapter_client()
+    except WARPUnavailableError as error:
+        logger.warning("Chat request rejected: %s", error)
+        return _warp_unavailable_response(error)
+
     if chat_req.stream:
         attempts = 0
         stream_last_error: Exception | None = None
@@ -682,6 +780,14 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
 
             if first_chunk is None or remaining_gen is None:
                 if route_error is not None:
+                    _log_upstream_error(
+                        route_error,
+                        request_id,
+                        request.method,
+                        request.url.path,
+                        route.provider_id,
+                        route.model_id,
+                    )
                     logger.warning(
                         "Failover: %s/%s stream failed (%s), trying next",
                         route.provider_id,
@@ -712,6 +818,14 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                     raise
                 except Exception as error:
                     outcome_error = error
+                    _log_upstream_error(
+                        error,
+                        request_id,
+                        request.method,
+                        request.url.path,
+                        _route.provider_id,
+                        _route.model_id,
+                    )
                     logger.error("Stream error from %s/%s: %r", _route.provider_id, _route.model_id, error)
                     yield f"data: {json.dumps(_stream_error_payload(error))}\n\n"
                 finally:
@@ -834,14 +948,14 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
             )
 
         if chat_route_error is not None:
-            if _structured_logger:
-                _structured_logger.log_error(
-                    message=f"Failover: {route.provider_id}/{route.model_id} failed ({type(chat_route_error).__name__})",
-                    request_id=request_id,
-                    method=request.method,
-                    path=request.url.path,
-                    provider=route.provider_id,
-                )
+            _log_upstream_error(
+                chat_route_error,
+                request_id,
+                request.method,
+                request.url.path,
+                route.provider_id,
+                route.model_id,
+            )
             logger.warning(
                 "Failover: %s/%s failed (%s), trying next",
                 route.provider_id,
@@ -915,6 +1029,12 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
             status_code=500,
         )
 
+    try:
+        _refresh_adapter_client()
+    except WARPUnavailableError as error:
+        logger.warning("Anthropic request rejected: %s", error)
+        return _anthropic_warp_unavailable_response(error)
+
     is_stream = body.get("stream", False)
 
     if is_stream:
@@ -983,6 +1103,14 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
 
             if first_chunk is None or remaining_gen is None:
                 if route_error is not None:
+                    _log_upstream_error(
+                        route_error,
+                        request_id,
+                        request.method,
+                        request.url.path,
+                        route.provider_id,
+                        route.model_id,
+                    )
                     logger.warning(
                         "Failover (anthropic): %s/%s stream failed (%s), trying next",
                         route.provider_id,
@@ -1018,6 +1146,14 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
                     raise
                 except Exception as error:
                     outcome_error = error
+                    _log_upstream_error(
+                        error,
+                        request_id,
+                        request.method,
+                        request.url.path,
+                        _route.provider_id,
+                        _route.model_id,
+                    )
                     logger.error("Stream error (anthropic) from %s/%s: %r", _route.provider_id, _route.model_id, error)
                     yield _sse_event(create_anthropic_error(_stream_error_status(error), _stream_error_message(error)))
                 finally:
@@ -1126,6 +1262,14 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
             return JSONResponse(resp_json)
 
         if chat_route_error is not None:
+            _log_upstream_error(
+                chat_route_error,
+                request_id,
+                request.method,
+                request.url.path,
+                route.provider_id,
+                route.model_id,
+            )
             logger.warning(
                 "Failover (anthropic): %s/%s failed (%s), trying next",
                 route.provider_id,
@@ -1157,6 +1301,8 @@ async def stats_endpoint(request: Request) -> JSONResponse:
 
 
 async def embeddings(request: Request) -> JSONResponse:
+    request_id = generate_request_id()
+
     try:
         body = await request.json()
     except Exception:
@@ -1175,6 +1321,12 @@ async def embeddings(request: Request) -> JSONResponse:
 
     if _routing_engine is None or _adapter_registry is None or _alias_resolver is None:
         return JSONResponse({"error": "Routing not initialized"}, status_code=500)
+
+    try:
+        _refresh_adapter_client()
+    except WARPUnavailableError as error:
+        logger.warning("Embedding request rejected: %s", error)
+        return _warp_unavailable_response(error)
 
     try:
         candidates = _get_routing_candidates(model_input)
@@ -1260,6 +1412,14 @@ async def embeddings(request: Request) -> JSONResponse:
             )
 
         if embedding_route_error is not None:
+            _log_upstream_error(
+                embedding_route_error,
+                request_id,
+                request.method,
+                request.url.path,
+                route.provider_id,
+                route.model_id,
+            )
             logger.warning(
                 "Failover embeddings: %s/%s failed (%s)",
                 route.provider_id,

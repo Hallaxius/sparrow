@@ -35,9 +35,42 @@ def _validate_health_url(value: str) -> str:
 
 class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", alias="SPARROW_HOST")
-    port: int = Field(default=8080, alias="SPARROW_PORT")
+    port: int = Field(
+        default=8080,
+        validation_alias=AliasChoices("SPARROW_PORT", "PORT", "port"),
+    )
     routing: str = Field(default="fair", alias="SPARROW_ROUTING")
     cooldown_seconds: int = Field(default=60, alias="SPARROW_COOLDOWN")
+
+    warp_required: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SPARROW_WARP_REQUIRED", "warp_required"),
+    )
+    request_deadline_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        validation_alias=AliasChoices("SPARROW_REQUEST_DEADLINE", "request_deadline_seconds"),
+    )
+    max_request_attempts: int = Field(
+        default=4,
+        ge=1,
+        validation_alias=AliasChoices("SPARROW_MAX_REQUEST_ATTEMPTS", "max_request_attempts"),
+    )
+    max_route_attempts: int = Field(
+        default=2,
+        ge=1,
+        validation_alias=AliasChoices("SPARROW_MAX_ROUTE_ATTEMPTS", "max_route_attempts"),
+    )
+    warp_startup_timeout: float = Field(
+        default=90.0,
+        gt=0,
+        validation_alias=AliasChoices("SPARROW_WARP_STARTUP_TIMEOUT", "warp_startup_timeout"),
+    )
+    warp_startup_retry_interval: float = Field(
+        default=2.0,
+        gt=0,
+        validation_alias=AliasChoices("SPARROW_WARP_STARTUP_RETRY_INTERVAL", "warp_startup_retry_interval"),
+    )
 
     warp_proxy_url: str = Field(
         default="socks5://warp:1080",

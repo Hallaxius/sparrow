@@ -309,6 +309,22 @@ def test_load_config():
     assert config.routing == "fair"
 
 
+def test_settings_use_railway_port_when_sparrow_port_is_unset(monkeypatch):
+    monkeypatch.delenv("SPARROW_PORT", raising=False)
+    monkeypatch.setenv("PORT", "9123")
+
+    assert Settings().port == 9123
+
+
+def test_settings_keep_local_warp_fallback_by_default():
+    settings = Settings()
+
+    assert settings.warp_required is False
+    assert settings.request_deadline_seconds == 120.0
+    assert settings.max_request_attempts == 4
+    assert settings.max_route_attempts == 2
+
+
 def test_load_all_providers():
     data = load_all_providers()
     assert "providers" in data

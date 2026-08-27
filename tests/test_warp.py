@@ -4,8 +4,11 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from sparrow.adapters.openai_compat import OpenAICompatAdapter
+from sparrow.adapters.registry import AdapterRegistry
 from sparrow.client import SparrowClient, _build_warp_client
 from sparrow.config.models import Settings
+from sparrow.errors import WARPUnavailableError
 from sparrow.proxy import WARPConfig, WARPHealth, WARPProxy
 
 
@@ -142,6 +145,37 @@ class TestWARPProxy:
             result = client.get_client(use_warp=True)
 
         assert result is client._warp_client
+
+    def test_sparrow_client_requires_warp_when_configured(self):
+        warp_proxy = WARPProxy(WARPConfig())
+        client = SparrowClient(warp_proxy)
+        client._direct_client = MagicMock()
+        client._warp_client = MagicMock()
+
+        with (
+            patch.object(warp_proxy, "is_warp_available", return_value=False),
+            pytest.raises(WARPUnavailableError, match="Required WARP proxy is unavailable"),
+        ):
+            client.get_client(use_warp=True, require_warp=True)
+
+    def test_registry_updates_existing_adapter_client(self):
+        registry = AdapterRegistry()
+        first_client = MagicMock(spec=httpx.AsyncClient)
+        second_client = MagicMock(spec=httpx.AsyncClient)
+        registry.set_client(first_client)
+        registry.register(
+            provider_id="provider",
+            provider_name="Provider",
+            base_url="https://provider.example/v1",
+            models=[],
+        )
+
+        adapter = registry.get("provider")
+        assert isinstance(adapter, OpenAICompatAdapter)
+
+        registry.set_client(second_client)
+
+        assert adapter._client is second_client
 
     def test_sparrow_client_raises_when_neither_client_initialized(self):
         client = SparrowClient(WARPProxy(WARPConfig()))

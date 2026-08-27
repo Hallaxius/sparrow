@@ -11,9 +11,14 @@ services:
       SPARROW_PORT: "8080"
       SPARROW_ROUTING: fair
       SPARROW_API_KEY: "${SPARROW_API_KEY:?SPARROW_API_KEY must be set}"
+      SPARROW_WARP_URL: "socks5://warp:1080"
+      SPARROW_WARP_REQUIRED: "false"
       WARP_HEALTH_INTERVAL: "60"
       WARP_CONNECT_TIMEOUT: "10"
       WARP_READ_TIMEOUT: "120"
+      SPARROW_REQUEST_DEADLINE: "120"
+      SPARROW_MAX_REQUEST_ATTEMPTS: "4"
+      SPARROW_MAX_ROUTE_ATTEMPTS: "2"
     depends_on:
       warp:
         condition: service_healthy

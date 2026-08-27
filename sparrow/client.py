@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 
+from sparrow.errors import WARPUnavailableError
 from sparrow.proxy import WARPProxy
 
 
@@ -73,9 +74,12 @@ class SparrowClient:
             finally:
                 await self.warp.stop()
 
-    def get_client(self, use_warp: bool = True) -> httpx.AsyncClient:
-        if use_warp and self._warp_client is not None and self.warp.is_warp_available():
-            return self._warp_client
+    def get_client(self, use_warp: bool = True, require_warp: bool = False) -> httpx.AsyncClient:
+        if use_warp:
+            if self._warp_client is not None and self.warp.is_warp_available():
+                return self._warp_client
+            if require_warp:
+                raise WARPUnavailableError()
         if self._direct_client is not None:
             return self._direct_client
         raise RuntimeError("SparrowClient not started. Call start() first.")

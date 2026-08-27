@@ -24,7 +24,7 @@ class StructuredLogger:
         provider: str = "",
         model: str = "",
     ) -> None:
-        entry = {
+        entry: dict[str, str | int | float] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": "info",
             "request_id": request_id,
@@ -46,8 +46,11 @@ class StructuredLogger:
         method: str = "",
         path: str = "",
         provider: str = "",
+        model: str = "",
+        status_code: int | None = None,
+        error_type: str = "",
     ) -> None:
-        entry = {
+        entry: dict[str, str | int | float] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": "error",
             "request_id": request_id,
@@ -59,6 +62,12 @@ class StructuredLogger:
             entry["path"] = path
         if provider:
             entry["provider"] = provider
+        if model:
+            entry["model"] = model
+        if status_code is not None:
+            entry["status"] = status_code
+        if error_type:
+            entry["error_type"] = error_type
         self._logger.error(json.dumps(entry))
 
 

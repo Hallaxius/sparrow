@@ -17,6 +17,11 @@ class AdapterRegistry:
 
     def set_client(self, client: httpx.AsyncClient) -> None:
         self._client = client
+        from sparrow.adapters.openai_compat import OpenAICompatAdapter
+
+        for adapter in self._adapters.values():
+            if isinstance(adapter, OpenAICompatAdapter):
+                adapter.set_client(client)
 
     def register(
         self,

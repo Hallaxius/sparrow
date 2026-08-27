@@ -77,6 +77,28 @@ async def test_readiness_passes_when_warp_unavailable(app, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_readiness_requires_warp_when_configured(app, monkeypatch):
+    async def unreachable(proxy_url: str, timeout: float = 5.0) -> bool:
+        return False
+
+    monkeypatch.setattr("sparrow.proxy.check_warp_reachable", unreachable)
+    monkeypatch.setattr(
+        app_module,
+        "load_config",
+        lambda: Settings(warp_required=True, warp_startup_timeout=0.01, warp_startup_retry_interval=0.001),
+    )
+
+    async with lifespan(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == "warp_unavailable"
+    assert response.json()["warp_required"] is True
+
+
+@pytest.mark.asyncio
 async def test_lifespan_failure_closes_resources_and_clears_state(app, monkeypatch):
     captured: list[object] = []
 

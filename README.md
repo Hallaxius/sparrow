@@ -269,10 +269,12 @@ Every response includes provider metadata:
 | Variable | Default | Description |
 |---|---|---|
 | `SPARROW_HOST` | `0.0.0.0` | Bind address |
-| `SPARROW_PORT` | `8080` | Listen port |
+| `PORT` | *(platform-provided)* | Fallback listen port when `SPARROW_PORT` is not set |
+| `SPARROW_PORT` | `8080` | Listen port; takes precedence over `PORT` |
 | `SPARROW_ROUTING` | `fair` | Routing mode (`fair`, `fast`, `quality`, `model`) |
 | `SPARROW_API_KEY` | *(required)* | Single API key accepted through `Authorization: Bearer` or `X-API-Key` |
 | `SPARROW_WARP_URL` | `socks5://warp:1080` | WARP SOCKS5 proxy URL |
+| `SPARROW_WARP_REQUIRED` | `false` | Require an available WARP proxy before readiness and provider requests |
 | `SPARROW_WARP_HTTP_URL` | *(empty)* | Optional HTTP proxy URL for WARP health traffic |
 | `SPARROW_WARP_HEALTH_CHECK_URL` | `https://cloudflare.com/cdn-cgi/trace` | WARP health endpoint |
 | `WARP_HEALTH_INTERVAL` | `60` | WARP health check interval (seconds) |
@@ -280,7 +282,20 @@ Every response includes provider metadata:
 | `WARP_READ_TIMEOUT` | `120` | WARP read timeout (seconds) |
 | `WARP_MAX_CONNECTIONS` | `100` | Maximum WARP connections |
 | `WARP_MAX_KEEPALIVE` | `20` | Maximum WARP keepalive connections |
+| `SPARROW_WARP_STARTUP_TIMEOUT` | `90` | Maximum time to wait for required WARP during startup (seconds) |
+| `SPARROW_WARP_STARTUP_RETRY_INTERVAL` | `2` | Retry interval while waiting for required WARP (seconds) |
+| `SPARROW_REQUEST_DEADLINE` | `120` | Total request deadline across provider attempts (seconds) |
+| `SPARROW_MAX_REQUEST_ATTEMPTS` | `4` | Maximum provider attempts per request |
+| `SPARROW_MAX_ROUTE_ATTEMPTS` | `2` | Maximum attempts for one route |
 Boolean settings accept `true`, `false`, `1`, `0`, `yes`, and `no`.
+
+### Railway deployment
+
+Deploy Sparrow and WARP as separate services in the same Railway project and environment. Railway private DNS is scoped to that environment and uses the service private domain, for example `warp.railway.internal` when the service is actually named `warp`.
+
+The Sparrow service must listen on Railway's `PORT` value. Leave `SPARROW_PORT` unset in Railway unless an explicit override is required. Set `SPARROW_WARP_REQUIRED=true` and set `SPARROW_WARP_URL` to the actual private SOCKS5 address exposed by the WARP service. The WARP service must listen on `0.0.0.0:1080` so Sparrow can reach it through private networking.
+
+The Compose `depends_on` health condition applies only to local Docker Compose. Railway services start independently, so Sparrow uses the bounded WARP startup wait and `/readyz` remains `503` until required WARP is available. `/healthz` remains a liveness check and does not prove provider connectivity.
 
 ---
 

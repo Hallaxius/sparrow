@@ -21,6 +21,8 @@ def test_compose_requires_json_key_warp_and_readiness_healthcheck():
     compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
     assert 'SPARROW_API_KEY: "${SPARROW_API_KEY:?SPARROW_API_KEY must be set}"' in compose
+    assert 'SPARROW_WARP_URL: "socks5://warp:1080"' in compose
+    assert 'SPARROW_WARP_REQUIRED: "false"' in compose
     assert 'test: ["CMD", "curl", "-fsS", "http://localhost:8080/readyz"]' in compose
     assert "condition: service_healthy" in compose
     assert (
@@ -34,3 +36,6 @@ def test_env_example_declares_operational_defaults_without_secret():
     env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
 
     assert "SPARROW_API_KEY=replace-with-a-long-random-secret" in env_example
+    assert "SPARROW_WARP_REQUIRED=false" in env_example
+    assert "SPARROW_WARP_STARTUP_TIMEOUT=90" in env_example
+    assert "SPARROW_REQUEST_DEADLINE=120" in env_example

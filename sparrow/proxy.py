@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import ssl
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -13,6 +14,13 @@ import httpx
 from sparrow.config.models import Settings
 
 logger = logging.getLogger("sparrow.proxy")
+
+
+def build_warp_ssl_context() -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.maximum_version = ssl.TLSVersion.TLSv1_2
+    return context
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,13 +104,21 @@ class WARPProxy:
         return self._warp_available if self._warp_available is not None else False
 
     async def wait_until_available(self, timeout: float, retry_interval: float) -> bool:
-        if self.is_warp_available():
-            return True
-
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while True:
-            if await self.check_health():
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+
+            if not self.is_warp_available():
+                reachable = await check_warp_reachable(self.config.proxy_url, timeout=min(remaining, 5.0))
+                if not reachable:
+                    await asyncio.sleep(min(retry_interval, remaining))
+                    continue
+                self._warp_available = True
+
+            if await self.check_health(timeout=remaining):
                 return True
             remaining = deadline - loop.time()
             if remaining <= 0:
@@ -151,6 +167,7 @@ class WARPProxy:
         }
         if use_proxy and self.config.proxy_url:
             kwargs["proxy"] = self.config.proxy_url
+            kwargs["verify"] = build_warp_ssl_context()
         return httpx.AsyncClient(**kwargs)
 
     def get_client(self, use_proxy: bool = True) -> httpx.AsyncClient:
@@ -162,11 +179,11 @@ class WARPProxy:
             self._client = self._build_client(use_proxy=True)
         return self._client
 
-    async def check_health(self) -> bool:
+    async def check_health(self, timeout: float | None = None) -> bool:
         temporary_client = self._client is None
         client = self._client or self._build_client()
         try:
-            resp = await client.get(self.config.health_check_url)
+            resp = await client.get(self.config.health_check_url, timeout=timeout)
             if resp.status_code != 200:
                 failures = self.health.consecutive_failures + 1
                 self.health = WARPHealth(

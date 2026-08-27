@@ -3,12 +3,13 @@ from __future__ import annotations
 import httpx
 
 from sparrow.errors import WARPUnavailableError
-from sparrow.proxy import WARPProxy
+from sparrow.proxy import WARPProxy, build_warp_ssl_context
 
 
 def _build_warp_client(config: WARPProxy) -> httpx.AsyncClient:
     warp_transport = httpx.AsyncHTTPTransport(
         proxy=config.config.proxy_url,
+        verify=build_warp_ssl_context(),
         limits=httpx.Limits(
             max_connections=config.config.max_connections,
             max_keepalive_connections=config.config.max_keepalive,

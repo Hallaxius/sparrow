@@ -99,6 +99,26 @@ async def test_readiness_requires_warp_when_configured(app, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_readiness_reflects_warp_loss_after_startup(app, monkeypatch):
+    monkeypatch.setattr(app_module, "load_config", lambda: Settings(warp_required=True))
+
+    async def startup_health(self, timeout: float, retry_interval: float) -> bool:
+        return True
+
+    monkeypatch.setattr(app_module.WARPProxy, "wait_until_available", startup_health)
+
+    async with lifespan(app):
+        assert app_module._client is not None
+        monkeypatch.setattr(app_module._client.warp, "is_warp_available", lambda: False)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["reason"] == "warp_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_lifespan_failure_closes_resources_and_clears_state(app, monkeypatch):
     captured: list[object] = []
 

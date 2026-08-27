@@ -1,3 +1,4 @@
+import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -56,7 +57,6 @@ class TestWARPHealth:
         assert health.healthy is False
         assert health.warp_status == "unknown"
 
-
 class TestWARPProxy:
     def test_requires_explicit_config(self):
         with pytest.raises(TypeError):
@@ -77,6 +77,9 @@ class TestWARPProxy:
         proxy = WARPProxy(config=config)
         client = proxy._build_client(use_proxy=True)
         assert client is not None
+        ssl_context = client._transport._pool._ssl_context
+        assert ssl_context.minimum_version == ssl.TLSVersion.TLSv1_2
+        assert ssl_context.maximum_version == ssl.TLSVersion.TLSv1_2
 
     @pytest.mark.asyncio
     async def test_unavailable_warp_keeps_proxy_mode_without_direct_fallback(self):
@@ -103,6 +106,17 @@ class TestWARPProxy:
             assert result is False
             assert proxy.health.consecutive_failures == 1
 
+    @pytest.mark.asyncio
+    async def test_wait_until_available_checks_proxy_health(self):
+        proxy = WARPProxy(config=WARPConfig())
+        proxy._warp_available = True
+
+        with patch.object(proxy, "check_health", new=AsyncMock(return_value=False)) as check_health:
+            result = await proxy.wait_until_available(timeout=0.01, retry_interval=0.01)
+
+        assert result is False
+        assert check_health.await_count >= 1
+
     def test_warp_client_uses_configured_transport_without_direct_fallback(self):
         config = WARPConfig(
             proxy_url="socks5://warp:1080",
@@ -119,6 +133,9 @@ class TestWARPProxy:
         assert client.timeout.read == 12.0
         assert client._transport._pool._max_connections == 40
         assert client._transport._pool._max_keepalive_connections == 7
+        ssl_context = client._transport._pool._ssl_context
+        assert ssl_context.minimum_version == ssl.TLSVersion.TLSv1_2
+        assert ssl_context.maximum_version == ssl.TLSVersion.TLSv1_2
 
         import asyncio
 

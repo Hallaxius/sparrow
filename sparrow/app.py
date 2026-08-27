@@ -616,6 +616,9 @@ async def health_check(request: Request) -> JSONResponse:
 
 
 async def ready_check(request: Request) -> JSONResponse:
+    global _readiness
+
+    _readiness = _compute_readiness()
     status_code = 200 if _readiness.ready else 503
     return JSONResponse(_readiness_payload(), status_code=status_code)
 

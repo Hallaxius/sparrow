@@ -39,7 +39,7 @@ SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible
 - ✅ **OpenAI-compatible** — drop-in replacement for any OpenAI SDK or client
 - ✅ **Automatic failover** — if one provider fails, the next is tried seamlessly
 - ✅ **Streaming support** — full SSE streaming with failover
-- ✅ **Docker-ready** — single `docker compose up` to run
+- ✅ **Docker-ready** — app container with an optional external WARP proxy
 - ✅ **Lightweight** — pure Python, no heavy dependencies
 
 ---
@@ -112,8 +112,11 @@ Request well-known model names and SparroW routes them to the best free equivale
 ```bash
 git clone https://github.com/hallaxius/sparrow.git
 cd sparrow
+cp .env.example .env
 docker compose up -d --build
 ```
+
+The Sparrow Compose file starts only the application. Run the independent WARP service from the `sparrow-warp` repository when IP rotation is required.
 
 ### Local development
 
@@ -128,7 +131,7 @@ uv run python -m sparrow
 
 - Python >= 3.12
 - [uv](https://docs.astral.sh/uv/) (package manager)
-- Docker + Docker Compose (for WARP proxy)
+- Docker + Docker Compose
 
 ---
 
@@ -149,13 +152,25 @@ Sparrow reads `providers.json` and `models.json` from the repository root. `spar
 uv run python -c "from sparrow.config.loader import load_all_providers; print(len(load_all_providers()['providers']))"
 ```
 
-### 3. Start the proxy and router
+### 3. Start the independent WARP proxy
+
+The WARP service is maintained in the separate `sparrow-warp` repository. Start it independently when the router must use WARP:
 
 ```bash
+cd ../sparrow-warp
 docker compose up -d --build
 ```
 
-### 4. Make an authenticated request
+The app-only Compose configuration points to `socks5://host.docker.internal:1080` by default. Keep `SPARROW_WARP_REQUIRED=false` for direct fallback, or set it to `true` after the WARP service is ready.
+
+### 4. Start Sparrow
+
+```bash
+cd ../sparrow
+docker compose up -d --build
+```
+
+### 5. Make an authenticated request
 
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
@@ -167,7 +182,7 @@ curl -X POST http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-### 5. Verify liveness and readiness
+### 6. Verify liveness and readiness
 
 ```bash
 curl -i http://localhost:8080/healthz
@@ -392,7 +407,7 @@ sparrow/
 ├── entrypoint.sh           # Explicit JSON/API-key startup checks
 ├── providers.json          # Provider metadata + aliases configuration
 ├── models.json             # Model definitions per provider
-├── docker-compose.yml      # Docker Compose (sparrow + WARP)
+├── docker-compose.yml      # Docker Compose for the Sparrow app
 ├── Dockerfile              # Python 3.12-slim + uv
 ├── pyproject.toml          # Project metadata + dev tools
 └── .gitignore
@@ -479,7 +494,7 @@ docker compose config --quiet
 docker compose up -d --build
 ```
 
-This starts both SparroW and the WARP proxy container. Compose enables WARP explicitly and waits for the WARP service healthcheck. WARP takes ~60–90 seconds to connect on first boot; SparroW remains not ready while required WARP is unavailable.
+This starts only SparroW. The WARP proxy is a separate service from the `sparrow-warp` repository. Start it independently and keep `SPARROW_WARP_URL` pointed at its SOCKS5 endpoint. The app-only Compose setup uses `host.docker.internal:1080`; a Railway deployment must use the WARP service private domain instead.
 
 ### Local
 
@@ -489,7 +504,7 @@ cp .env.example .env
 uv run python -m sparrow
 ```
 
-Local mode uses direct HTTP when WARP is unreachable. When a configured SOCKS5/SOCKS5H proxy is available, WARP is used automatically.
+Local mode uses direct HTTP when WARP is unreachable. When a configured SOCKS5/SOCKS5H proxy is available, WARP is used automatically. Set `SPARROW_WARP_REQUIRED=true` to make readiness and provider requests require the external proxy.
 
 ### Health Check
 

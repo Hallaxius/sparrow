@@ -17,18 +17,17 @@ def test_dockerfile_uses_pinned_images_and_json_config():
     assert "providers.toml" not in dockerfile
 
 
-def test_compose_requires_json_key_warp_and_readiness_healthcheck():
+def test_compose_defines_sparrow_with_external_warp_and_readiness_healthcheck():
     compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
     assert 'SPARROW_API_KEY: "${SPARROW_API_KEY:?SPARROW_API_KEY must be set}"' in compose
-    assert 'SPARROW_WARP_URL: "socks5://warp:1080"' in compose
-    assert 'SPARROW_WARP_REQUIRED: "false"' in compose
-    assert 'test: ["CMD", "curl", "-fsS", "http://localhost:8080/readyz"]' in compose
-    assert "condition: service_healthy" in compose
-    assert (
-        "dublok/cloudflare-warp:v1.0.76@sha256:2202c80915e85599b076bc9916a590a2a977a12057e2626d228c36be951436b6"
-        in compose
-    )
+    assert 'SPARROW_WARP_URL: "${SPARROW_WARP_URL:-socks5://host.docker.internal:1080}"' in compose
+    assert 'SPARROW_WARP_REQUIRED: "${SPARROW_WARP_REQUIRED:-false}"' in compose
+    assert 'test: ["CMD", "curl", "-fsS", "http://localhost:${SPARROW_PORT:-8080}/readyz"]' in compose
+    assert '"host.docker.internal:host-gateway"' in compose
+    assert "depends_on" not in compose
+    assert "dublok/cloudflare-warp" not in compose
+    assert "warp-data" not in compose
     assert "latest" not in compose
 
 

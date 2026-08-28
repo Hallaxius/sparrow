@@ -25,4 +25,4 @@ if [ -z "${SPARROW_API_KEY:-}" ]; then
 fi
 
 echo "Using JSON configuration: $CONFIG_FILE"
-exec uv run python -m sparrow
+exec uv run --frozen --no-sync python -m sparrow

@@ -172,6 +172,36 @@ async def test_chat_completion_stream_parses_sse_variants_and_closes_response():
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_stream_forwards_extra_body():
+    received_body = b""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal received_body
+        received_body = request.content
+        return httpx.Response(200, content=b"data: [DONE]\n\n", request=request)
+
+    request = ChatRequest(
+        model="model-1",
+        messages=[ChatMessage(role="user", content="hello")],
+        stream=True,
+        extra_body={"reasoning_effort": "high"},
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = OpenAICompatAdapter(
+            provider_id="provider-1",
+            provider_name="Provider 1",
+            base_url="https://api.test.com/v1",
+            models=[{"id": "model-1", "name": "Model 1", "enabled": True}],
+            client=client,
+        )
+        chunks = [chunk async for chunk in adapter.chat_completion_stream(request, "model-1")]
+
+    assert chunks == []
+    assert b"reasoning_effort" in received_body
+    assert b"high" in received_body
+
+
+@pytest.mark.asyncio
 async def test_build_headers_rotates_across_configured_keys():
     adapter = OpenAICompatAdapter(
         provider_id="nvidia",

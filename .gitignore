@@ -55,3 +55,5 @@ tools/
 .env
 .env.local
 AGENTS.md
+/.playwright-mcp
+*.png

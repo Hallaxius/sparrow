@@ -19,7 +19,6 @@ logger = logging.getLogger("sparrow.proxy")
 def build_warp_ssl_context() -> ssl.SSLContext:
     context = ssl.create_default_context()
     context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.maximum_version = ssl.TLSVersion.TLSv1_2
     return context
 
 
@@ -96,7 +95,9 @@ class WARPProxy:
             self.health = WARPHealth(warp_status="unreachable", reason="dns_unreachable")
             logger.warning("WARP proxy hostname not reachable")
         else:
-            logger.info("WARP proxy started: %s", self.config.proxy_url)
+            await self.check_health()
+            if self._warp_available:
+                logger.info("WARP proxy started: %s", self.config.proxy_url)
 
         self._ensure_health_task()
 

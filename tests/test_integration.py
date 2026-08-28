@@ -86,7 +86,7 @@ def test_entrypoint_starts_server_when_configured_json_exists(tmp_path):
     result = run_entrypoint(tmp_path, api_key="test-key")
 
     assert result.returncode == 0
-    assert result.stdout.splitlines()[-4:] == ["run", "python", "-m", "sparrow"]
+    assert result.stdout.splitlines()[-6:] == ["run", "--frozen", "--no-sync", "python", "-m", "sparrow"]
     assert "init" not in result.stdout
 
 

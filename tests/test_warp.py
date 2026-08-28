@@ -79,7 +79,7 @@ class TestWARPProxy:
         assert client is not None
         ssl_context = client._transport._pool._ssl_context
         assert ssl_context.minimum_version == ssl.TLSVersion.TLSv1_2
-        assert ssl_context.maximum_version == ssl.TLSVersion.TLSv1_2
+        assert ssl_context.maximum_version == ssl.TLSVersion.MAXIMUM_SUPPORTED
 
     @pytest.mark.asyncio
     async def test_unavailable_warp_keeps_proxy_mode_without_direct_fallback(self):
@@ -90,6 +90,18 @@ class TestWARPProxy:
         assert proxy.is_warp_available() is False
         assert proxy._client is not None
         assert proxy.get_client(use_proxy=True) is proxy._client
+        await proxy.stop()
+
+    @pytest.mark.asyncio
+    async def test_start_checks_warp_health_before_marking_it_available(self):
+        proxy = WARPProxy(config=WARPConfig(proxy_url="socks5://warp:1080"))
+        with (
+            patch("sparrow.proxy.check_warp_reachable", new=AsyncMock(return_value=True)),
+            patch.object(proxy, "check_health", new=AsyncMock(return_value=True)) as check_health,
+        ):
+            await proxy.start()
+
+        assert check_health.await_count == 1
         await proxy.stop()
 
     @pytest.mark.asyncio
@@ -135,7 +147,7 @@ class TestWARPProxy:
         assert client._transport._pool._max_keepalive_connections == 7
         ssl_context = client._transport._pool._ssl_context
         assert ssl_context.minimum_version == ssl.TLSVersion.TLSv1_2
-        assert ssl_context.maximum_version == ssl.TLSVersion.TLSv1_2
+        assert ssl_context.maximum_version == ssl.TLSVersion.MAXIMUM_SUPPORTED
 
         import asyncio
 

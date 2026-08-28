@@ -138,6 +138,8 @@ class OpenAICompatAdapter:
     async def chat_completion_stream(self, request: ChatRequest, model: str, **kwargs: object) -> AsyncIterator[str]:
         url = f"{self._base_url}{self._chat_path}"
         payload = request.model_dump(exclude_none=True)
+        if request.extra_body:
+            payload.update(request.extra_body)
         payload["model"] = model
         payload["stream"] = True
 

@@ -27,6 +27,13 @@
       "context": 128000,
       "quality": 5,
       "enabled": true
+    },
+    {
+      "id": "mimo-v2.5-free",
+      "name": "MiMo V2.5 Free",
+      "context": 200000,
+      "quality": 5,
+      "enabled": true
     }
   ],
   "17b72315-1e87-4a43-b86d-e455bfe57051": [
@@ -267,20 +274,6 @@
     }
   ],
   "f3100559-d247-449a-baa1-5092dc4fcf6c": [
-    {
-      "id": "deepseek-v4-flash:0731",
-      "name": "DeepSeek V4 Flash 0731",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "gemini-3.1-flash-lite",
-      "name": "Gemini 3.1 flash lite",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
     {
       "id": "minimax-m2.7",
       "name": "Minimax m2.7",

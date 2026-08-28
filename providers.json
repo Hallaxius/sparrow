@@ -49,8 +49,6 @@
     "gpt-4o-mini": "a16ce1ab-4e9d-446e-85ec-34974be6091a/openrouter/free",
     "claude-3.5-sonnet": "a16ce1ab-4e9d-446e-85ec-34974be6091a/nvidia/nemotron-3-ultra-550b-a55b:free",
     "claude-3-haiku": "1321946a-0d1a-4c00-882e-c626e19047e5/hy3-free",
-    "deepseek-r1": "f3100559-d247-449a-baa1-5092dc4fcf6c/deepseek-v4-flash:0731",
-    "gemini-2.5-flash": "f3100559-d247-449a-baa1-5092dc4fcf6c/gemini-3.1-flash-lite",
     "mistral-small": "c193adf9-0783-40fa-a892-3ad8463a2fb6/Mistral-Small-3.2-24B-Instruct-2506",
     "nvidia-gpt-oss-20b": "e142a874-b2b2-4b25-86b3-07834bee7126/openai/gpt-oss-20b",
     "nvidia-gemma-4-31b": "e142a874-b2b2-4b25-86b3-07834bee7126/google/gemma-4-31b-it",

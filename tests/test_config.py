@@ -278,12 +278,12 @@ def test_load_all_providers_preserves_current_json_inventory():
         "f3100559-d247-449a-baa1-5092dc4fcf6c",
     ]
     assert {provider_id: len(provider["models"]) for provider_id, provider in providers.items()} == {
-        "1321946a-0d1a-4c00-882e-c626e19047e5": 4,
+        "1321946a-0d1a-4c00-882e-c626e19047e5": 5,
         "17b72315-1e87-4a43-b86d-e455bfe57051": 4,
         "a16ce1ab-4e9d-446e-85ec-34974be6091a": 16,
         "c193adf9-0783-40fa-a892-3ad8463a2fb6": 13,
         "e142a874-b2b2-4b25-86b3-07834bee7126": 11,
-        "f3100559-d247-449a-baa1-5092dc4fcf6c": 6,
+        "f3100559-d247-449a-baa1-5092dc4fcf6c": 4,
     }
     assert providers["e142a874-b2b2-4b25-86b3-07834bee7126"]["base_url"] == "https://integrate.api.nvidia.com/v1"
     assert len(providers["e142a874-b2b2-4b25-86b3-07834bee7126"]["api_keys"]) == 4

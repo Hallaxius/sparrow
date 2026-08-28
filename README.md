@@ -98,8 +98,6 @@ Request well-known model names and SparroW routes them to the best free equivale
 | `gpt-4o-mini` | Kilo / OpenRouter Free |
 | `claude-3.5-sonnet` | Kilo / Nemotron 3 Ultra 550B |
 | `claude-3-haiku` | OpenCode / MiMo V2.5 |
-| `deepseek-r1` | OpenCode / DeepSeek V4 Flash |
-| `gemini-2.5-flash` | OpenCode / DeepSeek V4 Flash |
 | `mistral-small` | OVHcloud / Mistral Small 3.2 |
 | `auto` | Round-robin across all providers |
 

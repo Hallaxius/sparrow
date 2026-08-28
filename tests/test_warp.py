@@ -1,3 +1,4 @@
+import asyncio
 import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +22,7 @@ class TestWARPConfig:
     def test_settings_validate_warp_url_and_limits(self, monkeypatch):
         monkeypatch.setenv("SPARROW_WARP_URL", "socks5h://custom:1081")
         monkeypatch.setenv("WARP_HEALTH_INTERVAL", "15")
+        monkeypatch.setenv("WARP_HEALTH_CHECK_TIMEOUT", "4.5")
         monkeypatch.setenv("WARP_CONNECT_TIMEOUT", "3.5")
         monkeypatch.setenv("WARP_READ_TIMEOUT", "12")
         monkeypatch.setenv("WARP_MAX_CONNECTIONS", "40")
@@ -31,6 +33,7 @@ class TestWARPConfig:
 
         assert config.proxy_url == "socks5h://custom:1081"
         assert config.health_check_interval == 15
+        assert config.health_check_timeout == 4.5
         assert config.connect_timeout == 3.5
         assert config.read_timeout == 12
         assert config.max_connections == 40
@@ -57,6 +60,7 @@ class TestWARPHealth:
         assert health.healthy is False
         assert health.warp_status == "unknown"
 
+
 class TestWARPProxy:
     def test_requires_explicit_config(self):
         with pytest.raises(TypeError):
@@ -82,9 +86,9 @@ class TestWARPProxy:
         assert ssl_context.maximum_version == ssl.TLSVersion.MAXIMUM_SUPPORTED
 
     @pytest.mark.asyncio
-    async def test_unavailable_warp_keeps_proxy_mode_without_direct_fallback(self):
+    async def test_start_keeps_warp_unavailable_without_blocking_on_dns(self):
         proxy = WARPProxy(config=WARPConfig(proxy_url="socks5://warp:1080"))
-        with patch("sparrow.proxy.check_warp_reachable", new=AsyncMock(return_value=False)):
+        with patch("sparrow.proxy.check_warp_reachable", new=AsyncMock(side_effect=AssertionError)):
             await proxy.start()
 
         assert proxy.is_warp_available() is False
@@ -93,15 +97,25 @@ class TestWARPProxy:
         await proxy.stop()
 
     @pytest.mark.asyncio
-    async def test_start_checks_warp_health_before_marking_it_available(self):
+    async def test_start_monitors_warp_health_without_blocking(self):
         proxy = WARPProxy(config=WARPConfig(proxy_url="socks5://warp:1080"))
-        with (
-            patch("sparrow.proxy.check_warp_reachable", new=AsyncMock(return_value=True)),
-            patch.object(proxy, "check_health", new=AsyncMock(return_value=True)) as check_health,
-        ):
-            await proxy.start()
+        health_started = asyncio.Event()
+        release_health_check = asyncio.Event()
 
-        assert check_health.await_count == 1
+        async def check_health(timeout: float | None = None) -> bool:
+            health_started.set()
+            await release_health_check.wait()
+            return False
+
+        with (
+            patch.object(proxy, "check_health", side_effect=check_health) as health_check,
+        ):
+            await proxy.start(monitor_health=True)
+            await asyncio.wait_for(health_started.wait(), timeout=0.1)
+
+        assert proxy.is_warp_available() is False
+        assert health_check.await_count == 1
+        release_health_check.set()
         await proxy.stop()
 
     @pytest.mark.asyncio
@@ -120,7 +134,7 @@ class TestWARPProxy:
 
     @pytest.mark.asyncio
     async def test_wait_until_available_checks_proxy_health(self):
-        proxy = WARPProxy(config=WARPConfig())
+        proxy = WARPProxy(config=WARPConfig(health_check_timeout=0.005))
         proxy._warp_available = True
 
         with patch.object(proxy, "check_health", new=AsyncMock(return_value=False)) as check_health:
@@ -128,6 +142,21 @@ class TestWARPProxy:
 
         assert result is False
         assert check_health.await_count >= 1
+        assert check_health.await_args.kwargs["timeout"] == 0.005
+
+    @pytest.mark.asyncio
+    async def test_health_check_uses_configured_timeout(self):
+        proxy = WARPProxy(config=WARPConfig(health_check_timeout=4.5))
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
+            side_effect=httpx.ReadTimeout("", request=httpx.Request("GET", "https://example.com"))
+        )
+
+        with patch.object(proxy, "_build_client", return_value=mock_client):
+            result = await proxy.check_health()
+
+        assert result is False
+        assert mock_client.get.await_args.kwargs["timeout"] == 4.5
 
     def test_warp_client_uses_configured_transport_without_direct_fallback(self):
         config = WARPConfig(
@@ -148,8 +177,6 @@ class TestWARPProxy:
         ssl_context = client._transport._pool._ssl_context
         assert ssl_context.minimum_version == ssl.TLSVersion.TLSv1_2
         assert ssl_context.maximum_version == ssl.TLSVersion.MAXIMUM_SUPPORTED
-
-        import asyncio
 
         asyncio.run(client.aclose())
 

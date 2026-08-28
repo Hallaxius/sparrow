@@ -123,7 +123,7 @@ async def test_readiness_reflects_warp_loss_after_startup(app, monkeypatch):
 async def test_lifespan_failure_closes_resources_and_clears_state(app, monkeypatch):
     captured: list[object] = []
 
-    async def fail_start(self: object) -> None:
+    async def fail_start(self: object, monitor_warp: bool = False) -> None:
         captured.append(app_module._client)
         raise ConfigurationFileError("providers.json", "startup failure")
 

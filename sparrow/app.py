@@ -521,7 +521,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
         )
         warp = WARPProxy(WARPConfig.from_settings(settings))
         _client = SparrowClient(warp_proxy=warp)
-        await _client.start()
+        await _client.start(monitor_warp=not settings.warp_required)
         if settings.warp_required:
             available = await _client.warp.wait_until_available(
                 timeout=settings.warp_startup_timeout,
@@ -730,7 +730,9 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
         return JSONResponse({"error": "Routing engine not initialized"}, status_code=500)
 
     try:
-        candidates = _get_routing_candidates(model_input, max_tokens=max_tokens, messages=[m.model_dump() for m in chat_req.messages])
+        candidates = _get_routing_candidates(
+            model_input, max_tokens=max_tokens, messages=[m.model_dump() for m in chat_req.messages]
+        )
     except AliasResolutionError as error:
         return _invalid_request_response(str(error), param="model", code="invalid_model")
     if not candidates:
@@ -1086,7 +1088,9 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
         )
 
     try:
-        candidates = _get_routing_candidates(model_input, max_tokens=max_tokens, messages=[m.model_dump() for m in chat_req.messages])
+        candidates = _get_routing_candidates(
+            model_input, max_tokens=max_tokens, messages=[m.model_dump() for m in chat_req.messages]
+        )
     except AliasResolutionError as error:
         return JSONResponse(
             create_anthropic_error(400, str(error)),
@@ -1417,9 +1421,7 @@ async def stats_endpoint(request: Request) -> JSONResponse:
     summary = _stats.get_summary()
     if _health is not None:
         breakers = _health.get_summary()
-        summary["circuit_breakers"] = {
-            key: state for key, state in breakers.items() if state["state"] != "closed"
-        }
+        summary["circuit_breakers"] = {key: state for key, state in breakers.items() if state["state"] != "closed"}
         summary["circuit_breakers_open"] = sum(1 for s in breakers.values() if s["state"] == "open")
         summary["circuit_breakers_half_open"] = sum(1 for s in breakers.values() if s["state"] == "half-open")
     return JSONResponse(summary)

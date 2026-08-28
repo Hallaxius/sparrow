@@ -53,8 +53,8 @@ class SparrowClient:
         self._direct_client: httpx.AsyncClient | None = None
         self._warp_client: httpx.AsyncClient | None = None
 
-    async def start(self) -> None:
-        await self.warp.start()
+    async def start(self, monitor_warp: bool = False) -> None:
+        await self.warp.start(monitor_health=monitor_warp)
         if self.warp.config.proxy_url:
             self._warp_client = _build_warp_client(self.warp)
         self._direct_client = _build_direct_client(self.warp)

@@ -28,6 +28,7 @@ class WARPConfig:
     http_proxy_url: str = ""
     health_check_url: str = "https://cloudflare.com/cdn-cgi/trace"
     health_check_interval: int = 60
+    health_check_timeout: float = 5.0
     connect_timeout: float = 10.0
     read_timeout: float = 120.0
     max_connections: int = 100
@@ -40,6 +41,7 @@ class WARPConfig:
             http_proxy_url=settings.warp_http_proxy_url,
             health_check_url=settings.warp_health_check_url,
             health_check_interval=settings.warp_health_interval,
+            health_check_timeout=settings.warp_health_check_timeout,
             connect_timeout=settings.warp_connect_timeout,
             read_timeout=settings.warp_read_timeout,
             max_connections=settings.warp_max_connections,
@@ -82,7 +84,7 @@ class WARPProxy:
         if self._warp_available and self.config.health_check_interval > 0 and self._health_task is None:
             self._health_task = asyncio.create_task(self._health_loop())
 
-    async def start(self) -> None:
+    async def start(self, monitor_health: bool = False) -> None:
         if self._health_task:
             self._health_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -90,16 +92,9 @@ class WARPProxy:
             self._health_task = None
 
         self._client = self._build_client()
-        self._warp_available = await check_warp_reachable(self.config.proxy_url)
-        if not self._warp_available:
-            self.health = WARPHealth(warp_status="unreachable", reason="dns_unreachable")
-            logger.warning("WARP proxy hostname not reachable")
-        else:
-            await self.check_health()
-            if self._warp_available:
-                logger.info("WARP proxy started: %s", self.config.proxy_url)
-
-        self._ensure_health_task()
+        self._warp_available = False
+        if monitor_health and self.config.health_check_interval > 0:
+            self._health_task = asyncio.create_task(self._health_loop(initial_delay=0.0))
 
     def is_warp_available(self) -> bool:
         return self._warp_available if self._warp_available is not None else False
@@ -119,7 +114,8 @@ class WARPProxy:
                     continue
                 self._warp_available = True
 
-            if await self.check_health(timeout=remaining):
+            if await self.check_health(timeout=min(remaining, self.config.health_check_timeout)):
+                logger.info("WARP proxy started: %s", self.config.proxy_url)
                 return True
             remaining = deadline - loop.time()
             if remaining <= 0:
@@ -184,7 +180,8 @@ class WARPProxy:
         temporary_client = self._client is None
         client = self._client or self._build_client()
         try:
-            resp = await client.get(self.config.health_check_url, timeout=timeout)
+            request_timeout = self.config.health_check_timeout if timeout is None else timeout
+            resp = await client.get(self.config.health_check_url, timeout=request_timeout)
             if resp.status_code != 200:
                 failures = self.health.consecutive_failures + 1
                 self.health = WARPHealth(
@@ -227,16 +224,21 @@ class WARPProxy:
                 reason=type(e).__name__,
             )
             self._warp_available = False
-            logger.warning("WARP health check failed: %s (failures=%d)", e, self.health.consecutive_failures)
+            logger.warning(
+                "WARP health check failed: %s (failures=%d)", type(e).__name__, self.health.consecutive_failures
+            )
             return False
         finally:
             if temporary_client:
                 await client.aclose()
 
-    async def _health_loop(self) -> None:
+    async def _health_loop(self, initial_delay: float | None = None) -> None:
+        delay = self.config.health_check_interval if initial_delay is None else initial_delay
+        if delay > 0:
+            await asyncio.sleep(delay)
         while True:
+            await self.check_health(timeout=self.config.health_check_timeout)
             await asyncio.sleep(self.config.health_check_interval)
-            await self.check_health()
 
     def get_status(self) -> dict[str, object]:
         return {

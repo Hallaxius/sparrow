@@ -93,6 +93,15 @@ class Settings(BaseSettings):
         ge=0,
         validation_alias=AliasChoices("WARP_HEALTH_INTERVAL", "SPARROW_WARP_HEALTH_INTERVAL", "warp_health_interval"),
     )
+    warp_health_check_timeout: float = Field(
+        default=5.0,
+        gt=0,
+        validation_alias=AliasChoices(
+            "WARP_HEALTH_CHECK_TIMEOUT",
+            "SPARROW_WARP_HEALTH_CHECK_TIMEOUT",
+            "warp_health_check_timeout",
+        ),
+    )
     warp_connect_timeout: float = Field(
         default=10.0,
         gt=0,

@@ -310,15 +310,7 @@
       "enabled": true
     }
   ],
-  "c1d70340-1800-4faf-aecc-63480c0ef315": [
-    {
-      "id": "glm-5.3-flash",
-      "name": "glm-5.3-flash",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    }
-  ],
+
   "e142a874-b2b2-4b25-86b3-07834bee7126": [
     {
       "id": "openai/gpt-oss-20b",

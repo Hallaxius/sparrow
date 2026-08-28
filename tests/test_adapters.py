@@ -30,10 +30,10 @@ class TestAdapterRegistry:
 
     def test_build_headers_includes_bearer_when_api_key_set(self):
         adapter = OpenAICompatAdapter(
-            provider_id="empero",
-            provider_name="Empero",
-            base_url="https://free.empero.org/v1",
-            models=[{"id": "Qwen/Qwen3.8-27B-FP8", "name": "Qwen3.8 FP8", "enabled": True}],
+            provider_id="bearer-provider",
+            provider_name="Bearer Provider",
+            base_url="https://api.bearer.test/v1",
+            models=[{"id": "test-model", "name": "Test Model", "enabled": True}],
             client=httpx.AsyncClient(),
             api_key="free",
         )

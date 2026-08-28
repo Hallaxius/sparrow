@@ -164,6 +164,20 @@ def test_circuit_breaker_allows_one_half_open_probe():
     assert breaker.state == "closed"
 
 
+def test_circuit_breaker_cancelled_half_open_probe_can_be_reacquired():
+    breaker = CircuitBreaker(failure_threshold=1, recovery_time=10)
+    breaker._failures = 1
+    breaker._state = "open"
+    breaker._last_failure = 0.0
+
+    with patch("sparrow.routing.health.time.time", return_value=111.0):
+        assert breaker.try_acquire() is True
+        breaker.cancel_acquire()
+
+    with patch("sparrow.routing.health.time.time", return_value=122.0):
+        assert breaker.try_acquire() is True
+
+
 def test_route_health_tracker_creates_one_breaker_under_concurrency():
     tracker = RouteHealthTracker()
 
@@ -295,3 +309,63 @@ async def test_embeddings_share_retry_quota_stats_and_breaker_policy(app, monkey
         assert app_module._health.get_breaker("embedding:model").state == "closed"
 
     get_api_key_auth().set_keys("test-key")
+
+
+@pytest.mark.asyncio
+async def test_normal_chat_attempt_persists_breaker_state_when_tracker_has_path(app, monkeypatch, tmp_path):
+    class SuccessfulAdapter:
+        async def chat_completion(self, request, model):
+            return _chat_response(model)
+
+    route = Route("persisted", "model")
+    persist_path = tmp_path / "circuit_breakers.json"
+    tracker = RouteHealthTracker(persist_path=persist_path)
+
+    async with lifespan(app):
+        engine = app_module._routing_engine
+        assert engine is not None
+        monkeypatch.setattr(engine, "_health", tracker)
+        monkeypatch.setattr(engine, "get_candidates", lambda model, max_tokens=None: [route])
+        monkeypatch.setattr(app_module, "_adapter_registry", _Registry({"persisted": SuccessfulAdapter()}))
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/v1/chat/completions", json=_chat_payload(), headers=_request_headers())
+
+        assert response.status_code == 200
+        assert persist_path.exists()
+        assert RouteHealthTracker(persist_path=persist_path).get_summary()["persisted:model"]["state"] == "closed"
+
+
+@pytest.mark.asyncio
+async def test_chat_dispatch_skips_route_that_becomes_unhealthy_after_candidate_selection(app, monkeypatch):
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat_completion(self, request, model):
+            self.calls += 1
+            return _chat_response(model)
+
+    route = Route("became-unhealthy", "model")
+    adapter = Adapter()
+
+    class Registry:
+        def get(self, provider_id):
+            engine = app_module._routing_engine
+            assert engine is not None
+            breaker = engine._health.get_breaker(f"{provider_id}:model")
+            for _ in range(breaker.failure_threshold):
+                breaker.record_failure()
+            return adapter
+
+    async with lifespan(app):
+        engine = app_module._routing_engine
+        assert engine is not None
+        monkeypatch.setattr(engine, "get_candidates", lambda model, max_tokens=None: [route])
+        monkeypatch.setattr(app_module, "_adapter_registry", Registry())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/v1/chat/completions", json=_chat_payload(), headers=_request_headers())
+
+    assert response.status_code == 503
+    assert adapter.calls == 0

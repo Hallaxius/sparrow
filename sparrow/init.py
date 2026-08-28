@@ -6,6 +6,8 @@ import logging
 import os
 import sys
 import tempfile
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,14 @@ DEFAULT_CONTEXT = 128000
 DEFAULT_ENABLED = True
 
 MODELS_ENDPOINT = "/models"
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogReconciliation:
+    models: tuple[ProviderModelConfig, ...]
+    added_ids: tuple[str, ...]
+    removed_ids: tuple[str, ...]
+    disabled_ids: tuple[str, ...]
 
 
 NON_CHAT_KEYWORDS = [
@@ -225,38 +235,66 @@ def providers_config_to_models_json(config: ProvidersConfig) -> str:
 
 
 def write_providers_config(path: Path, config: ProvidersConfig) -> None:
-    write_text_atomic(path, providers_config_to_providers_json(config))
     models_path = path.parent / "models.json"
-    write_text_atomic(models_path, providers_config_to_models_json(config))
+    providers_content = providers_config_to_providers_json(config)
+    models_content = providers_config_to_models_json(config)
+    original_providers = path.read_text(encoding="utf-8") if path.exists() else None
+    original_models = models_path.read_text(encoding="utf-8") if models_path.exists() else None
+
+    try:
+        write_text_atomic(path, providers_content)
+        write_text_atomic(models_path, models_content)
+    except BaseException:
+        if original_providers is None:
+            path.unlink(missing_ok=True)
+        else:
+            write_text_atomic(path, original_providers)
+        if original_models is None:
+            models_path.unlink(missing_ok=True)
+        else:
+            write_text_atomic(models_path, original_models)
+        raise
 
 
-def merge_models(
-    existing_models: list[ProviderModelConfig], fetched_models: list[dict[str, Any]]
-) -> list[ProviderModelConfig]:
-    fetched_ids = [str(model["id"]) for model in fetched_models if "id" in model]
+def reconcile_models(
+    existing_models: Sequence[ProviderModelConfig], fetched_models: Sequence[Mapping[str, object]] | None
+) -> CatalogReconciliation:
+    if not fetched_models:
+        return CatalogReconciliation(tuple(existing_models), (), (), ())
+
+    fetched_ids: list[str] = []
+    for fetched_model in fetched_models:
+        model_id = fetched_model.get("id")
+        if isinstance(model_id, str) and model_id and model_id not in fetched_ids:
+            fetched_ids.append(model_id)
+
     if not fetched_ids:
-        return existing_models
+        return CatalogReconciliation(tuple(existing_models), (), (), ())
 
+    fetched_id_set = set(fetched_ids)
     existing_ids = {model.id for model in existing_models}
-    merged = list(existing_models)
+    retained_models = tuple(model for model in existing_models if model.id in fetched_id_set)
+    added_ids = tuple(model_id for model_id in fetched_ids if model_id not in existing_ids)
+    added_models = tuple(
+        ProviderModelConfig(
+            id=model_id,
+            name=model_id,
+            context=DEFAULT_CONTEXT,
+            quality=DEFAULT_QUALITY,
+            enabled=DEFAULT_ENABLED,
+        )
+        for model_id in added_ids
+    )
+    removed_ids = tuple(
+        model.id for model in existing_models if model.id not in fetched_id_set and model.enabled
+    )
+    disabled_ids = tuple(
+        model.id for model in existing_models if model.id not in fetched_id_set and not model.enabled
+    )
+    return CatalogReconciliation(retained_models + added_models, added_ids, removed_ids, disabled_ids)
 
-    for model_id in fetched_ids:
-        if model_id not in existing_ids:
-            merged.append(
-                ProviderModelConfig(
-                    id=model_id,
-                    name=model_id,
-                    context=DEFAULT_CONTEXT,
-                    quality=DEFAULT_QUALITY,
-                    enabled=DEFAULT_ENABLED,
-                )
-            )
-            existing_ids.add(model_id)
 
-    return merged
-
-
-async def run_init() -> int:
+async def run_init(*, apply: bool = True) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -271,38 +309,53 @@ async def run_init() -> int:
         client = warp.get_client(use_proxy=True)
 
         total_fetched = 0
-        total_merged = 0
+        total_models = 0
         updated_providers: dict[str, ProviderConfig] = {}
 
         for provider_id, provider in providers.items():
             fetched_models = await fetch_models_from_provider(provider_id, provider.base_url, client)
-            merged_models = merge_models(provider.models, fetched_models)
-            updated_providers[provider_id] = provider.model_copy(update={"models": merged_models})
+            reconciliation = reconcile_models(provider.models, fetched_models)
+            updated_providers[provider_id] = provider.model_copy(update={"models": list(reconciliation.models)})
             total_fetched += len(fetched_models)
-            total_merged += len(merged_models)
+            total_models += len(reconciliation.models)
             if fetched_models:
                 logger.info(
-                    "Provider %s: %d fetched, %d merged",
+                    "Provider %s: %d fetched, %d added, %d removed, %d disabled",
                     provider_id,
                     len(fetched_models),
-                    len(merged_models),
+                    len(reconciliation.added_ids),
+                    len(reconciliation.removed_ids),
+                    len(reconciliation.disabled_ids),
                 )
             else:
                 logger.info(
-                    "Provider %s: no models fetched, keeping %d existing models", provider_id, len(merged_models)
+                    "Provider %s: no models fetched, keeping %d existing models", provider_id, len(reconciliation.models)
                 )
 
-        updated_config = ProvidersConfig(providers=updated_providers, aliases=providers_config.aliases)
-        write_providers_config(config_path, updated_config)
+        updated_config = providers_config.model_copy(update={"providers": updated_providers})
+        enabled_targets = {
+            f"{provider_id}/{model.id}"
+            for provider_id, provider in updated_providers.items()
+            for model in provider.models
+            if model.enabled
+        }
+        invalid_aliases = tuple(
+            alias for alias, target in updated_config.aliases.items() if target not in enabled_targets
+        )
+        if invalid_aliases:
+            logger.error("Aliases target unavailable models: %s", ", ".join(invalid_aliases))
+            return 1
+        if apply:
+            write_providers_config(config_path, updated_config)
     finally:
         await warp.stop()
 
     logger.info(
-        "Updated configuration %s: %d providers, %d fetched models, %d total models",
+        "Catalog reconciliation %s: %d providers, %d fetched models, %d total models",
         config_path,
         len(providers),
         total_fetched,
-        total_merged,
+        total_models,
     )
     return 0
 

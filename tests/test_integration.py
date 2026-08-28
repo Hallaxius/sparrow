@@ -70,7 +70,8 @@ def test_entrypoint_fails_when_configured_json_is_missing(tmp_path):
 
     assert result.returncode != 0
     assert "configuration file not found" in result.stderr
-    assert "sparrow init" in result.stderr
+    assert "deployment image" in result.stderr
+    assert "sparrow init" not in result.stderr
     assert "init" not in result.stdout
 
 

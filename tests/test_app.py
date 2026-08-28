@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -656,6 +657,7 @@ class _TrackedAsyncIterator:
 async def test_stream_failover_closes_failed_and_successful_iterators(app, monkeypatch):
     first = _TrackedAsyncIterator([], RuntimeError("before first event"))
     second = _TrackedAsyncIterator(["second"])
+    attempt_records: list[tuple[str, str, str, str]] = []
 
     class Adapter:
         def __init__(self, stream):
@@ -671,6 +673,11 @@ async def test_stream_failover_closes_failed_and_successful_iterators(app, monke
     ]
 
     async with lifespan(app):
+        monkeypatch.setattr(
+            app_module,
+            "record_attempt",
+            lambda provider, model, phase, outcome: attempt_records.append((provider, model, phase, outcome)),
+        )
         monkeypatch.setattr(app_module._routing_engine, "get_candidates", lambda model, max_tokens=None: routes)
         monkeypatch.setattr(
             app_module,
@@ -689,12 +696,17 @@ async def test_stream_failover_closes_failed_and_successful_iterators(app, monke
     assert "data: second\n\ndata: [DONE]\n\n" in response.text
     assert first.closed is True
     assert second.closed is True
+    assert attempt_records == [
+        ("provider-1", "model-1", "first_chunk", "error"),
+        ("provider-2", "model-2", "stream_after_first_chunk", "success"),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_stream_error_after_first_event_emits_one_error_without_failover(app, monkeypatch):
-    first = _TrackedAsyncIterator(["first"], RuntimeError("after first event"))
+async def test_stream_error_after_first_event_emits_one_error_without_failover(app, monkeypatch, caplog):
+    first = _TrackedAsyncIterator(["first"], httpx.RemoteProtocolError("after first event"))
     second_calls = 0
+    attempt_records: list[tuple[str, str, str, str]] = []
 
     class FirstAdapter:
         def chat_completion_stream(self, request, model):
@@ -713,6 +725,11 @@ async def test_stream_error_after_first_event_emits_one_error_without_failover(a
     adapters = {"provider-1": FirstAdapter(), "provider-2": SecondAdapter()}
 
     async with lifespan(app):
+        monkeypatch.setattr(
+            app_module,
+            "record_attempt",
+            lambda provider, model, phase, outcome: attempt_records.append((provider, model, phase, outcome)),
+        )
         monkeypatch.setattr(app_module._routing_engine, "get_candidates", lambda model, max_tokens=None: routes)
         monkeypatch.setattr(
             app_module,
@@ -732,6 +749,15 @@ async def test_stream_error_after_first_event_emits_one_error_without_failover(a
     assert "data: [DONE]" not in response.text
     assert second_calls == 0
     assert first.closed is True
+    assert attempt_records == [("provider-1", "model-1", "stream_after_first_chunk", "transport_error")]
+    error_entries = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "sparrow" and "Upstream request failed" in record.getMessage()
+    ]
+    assert len(error_entries) == 1
+    assert error_entries[0]["error_type"] == "RemoteProtocolError"
+    assert error_entries[0]["phase"] == "stream_after_first_chunk"
 
 
 @pytest.mark.asyncio
@@ -783,50 +809,46 @@ async def test_stream_failover_skips_quota_exhausted_candidate(app, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_stream_failover_resets_deadline_per_candidate(app, monkeypatch):
-    class _SlowAsyncIterator:
-        def __init__(self, events, error=None):
-            self.events = iter(events)
-            self.error = error
+async def test_stream_failover_uses_one_absolute_deadline_across_candidates(app, monkeypatch):
+    class Clock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = Clock()
+
+    class ExpiredStream:
+        def __init__(self) -> None:
             self.closed = False
-            self._first = True
 
         def __aiter__(self):
             return self
 
         async def __anext__(self) -> str:
-            if self._first:
-                self._first = False
-                await asyncio.sleep(0.2)
-            try:
-                return next(self.events)
-            except StopIteration:
-                if self.error is not None:
-                    error = self.error
-                    self.error = None
-                    raise error from None
-                raise StopAsyncIteration from None
+            clock.now = 1.0
+            raise httpx.ReadTimeout("deadline elapsed")
 
         async def aclose(self) -> None:
             self.closed = True
 
-    fast = _TrackedAsyncIterator(["fast"])
+    expired = ExpiredStream()
 
-    class SlowAdapter:
-        def __init__(self):
-            self.last_stream = None
+    class ExpiredAdapter:
+        def chat_completion_stream(self, request, model):
+            return expired
+
+    class LaterAdapter:
+        def __init__(self) -> None:
+            self.calls = 0
 
         def chat_completion_stream(self, request, model):
-            self.last_stream = _SlowAsyncIterator(["slow"])
-            return self.last_stream
+            self.calls += 1
+            return _TrackedAsyncIterator(["unexpected"])
 
-    slow_adapter = SlowAdapter()
-
-    class FastAdapter:
-        def chat_completion_stream(self, request, model):
-            return fast
-
-    adapters = {"provider-1": slow_adapter, "provider-2": FastAdapter()}
+    later = LaterAdapter()
+    adapters = {"provider-1": ExpiredAdapter(), "provider-2": later}
     routes = [
         RoutingRoute(provider_id="provider-1", model_id="model-1"),
         RoutingRoute(provider_id="provider-2", model_id="model-2"),
@@ -834,6 +856,7 @@ async def test_stream_failover_resets_deadline_per_candidate(app, monkeypatch):
 
     async with lifespan(app):
         monkeypatch.setattr(app_module, "_REQUEST_DEADLINE_SECONDS", 0.05)
+        monkeypatch.setattr(app_module.time, "monotonic", clock.monotonic)
         monkeypatch.setattr(app_module._routing_engine, "get_candidates", lambda model, max_tokens=None: routes)
         monkeypatch.setattr(
             app_module,
@@ -848,10 +871,9 @@ async def test_stream_failover_resets_deadline_per_candidate(app, monkeypatch):
                 headers={"Authorization": "Bearer test-key"},
             )
 
-    assert response.status_code == 200
-    assert "data: fast\n\ndata: [DONE]\n\n" in response.text
-    assert slow_adapter.last_stream is not None and slow_adapter.last_stream.closed is True
-    assert fast.closed is True
+    assert response.status_code == 504
+    assert later.calls == 0
+    assert expired.closed is True
 
 
 def _single_route_stream_setup(monkeypatch, app, adapters):
@@ -865,21 +887,33 @@ def _single_route_stream_setup(monkeypatch, app, adapters):
 
 
 @pytest.mark.asyncio
-async def test_stream_survives_beyond_request_deadline(app, monkeypatch):
-    monkeypatch.setattr(app_module, "_REQUEST_DEADLINE_SECONDS", 0.05)
+async def test_stream_enforces_request_deadline_after_first_chunk(app, monkeypatch):
+    class Clock:
+        def __init__(self) -> None:
+            self.now = 0.0
 
-    async def slow_second_chunk():
-        yield "data-1"
-        await asyncio.sleep(0.3)
-        yield "data-2"
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = Clock()
+    stream = _TrackedAsyncIterator(["data-1", "data-2"])
+
+    async def next_chunk_after_deadline(upstream, deadline=None):
+        clock.now = 1.0
+        if deadline is not None and deadline <= clock.now:
+            raise TimeoutError("request deadline exceeded")
+        return await upstream.__anext__()
 
     class Adapter:
         def chat_completion_stream(self, request, model):
-            return slow_second_chunk()
+            return stream
 
     adapters = {"provider-1": Adapter()}
 
     async with lifespan(app):
+        monkeypatch.setattr(app_module, "_REQUEST_DEADLINE_SECONDS", 0.05)
+        monkeypatch.setattr(app_module.time, "monotonic", clock.monotonic)
+        monkeypatch.setattr(app_module, "_next_stream_chunk", next_chunk_after_deadline)
         _single_route_stream_setup(monkeypatch, app, adapters)
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -891,9 +925,11 @@ async def test_stream_survives_beyond_request_deadline(app, monkeypatch):
 
     assert response.status_code == 200
     assert "data: data-1" in response.text
-    assert "data: data-2" in response.text
-    assert "data: [DONE]" in response.text
-    assert "upstream_error" not in response.text
+    assert response.text.count("Upstream stream timed out") == 1
+    assert '"type": "upstream_error"' in response.text
+    assert "data: data-2" not in response.text
+    assert "data: [DONE]" not in response.text
+    assert stream.closed is True
 
 
 @pytest.mark.asyncio
@@ -929,34 +965,57 @@ async def test_stream_idle_timeout_emits_timeout_message(app, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stream_client_abort_does_not_record_provider_failure(app, monkeypatch):
-    async def two_chunks_slowly():
-        yield "chunk-1"
-        await asyncio.sleep(0.5)
-        yield "chunk-2"
+async def test_stream_client_abort_closes_upstream_without_recording_attempt(app, monkeypatch, caplog):
+    class WaitingStream:
+        def __init__(self) -> None:
+            self.sent_first = False
+            self.closed = False
+            self.waiting = asyncio.Event()
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self) -> str:
+            if not self.sent_first:
+                self.sent_first = True
+                return "chunk-1"
+            await self.waiting.wait()
+            raise StopAsyncIteration
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    stream = WaitingStream()
+    caplog.set_level("INFO", logger="sparrow")
+    attempt_records: list[tuple[str, str, str, str]] = []
+    cancelled_attempts: list[RoutingRoute] = []
 
     class Adapter:
         def chat_completion_stream(self, request, model):
-            return two_chunks_slowly()
+            return stream
 
     adapters = {"provider-1": Adapter()}
 
     async with lifespan(app):
+        monkeypatch.setattr(
+            app_module,
+            "record_attempt",
+            lambda provider, model, phase, outcome: attempt_records.append((provider, model, phase, outcome)),
+        )
+        monkeypatch.setattr(app_module, "_cancel_attempt", lambda route: cancelled_attempts.append(route))
         _single_route_stream_setup(monkeypatch, app, adapters)
-        transport = httpx.ASGITransport(app=app)
-        async with (
-            httpx.AsyncClient(transport=transport, base_url="http://test") as client,
-            client.stream(
-                "POST",
-                "/v1/chat/completions",
-                json={"model": "auto", "messages": [{"role": "user", "content": "hello"}], "stream": True},
-                headers={"Authorization": "Bearer test-key"},
-            ) as response,
-        ):
-            assert response.status_code == 200
-            async for line in response.aiter_lines():
-                if line:
-                    break
+        body = b'{"model":"auto","messages":[{"role":"user","content":"hello"}],"stream":true}'
+
+        async def receive() -> dict[str, object]:
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        request = app_module.Request(
+            {"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []}, receive
+        )
+        response = await app_module.chat_completions(request)
+        body_iterator = response.body_iterator
+        assert await body_iterator.__anext__() == "data: chunk-1\n\n"
+        await body_iterator.aclose()
 
         engine = app_module._routing_engine
         assert engine is not None
@@ -964,6 +1023,21 @@ async def test_stream_client_abort_does_not_record_provider_failure(app, monkeyp
         assert health is not None
         breaker = health.get_breaker("provider-1:model-1")
         assert breaker.failures == 0
+        assert app_module._stats is not None
+        assert app_module._stats.get_provider_stats("provider-1") is None
+        assert stream.closed is True
+        assert len(cancelled_attempts) == 1
+        assert cancelled_attempts[0].provider_id == "provider-1"
+        assert cancelled_attempts[0].model_id == "model-1"
+        assert attempt_records == [("provider-1", "model-1", "stream_after_first_chunk", "client_cancelled")]
+        cancellation_entries = [
+            json.loads(record.getMessage())
+            for record in caplog.records
+            if record.name == "sparrow" and '"event": "client_cancelled"' in record.getMessage()
+        ]
+        assert len(cancellation_entries) == 1
+        assert cancellation_entries[0]["phase"] == "stream_after_first_chunk"
+        assert "status" not in cancellation_entries[0]
 
 
 class LifecyclePlugin:
@@ -1122,7 +1196,9 @@ async def test_extra_body_reaches_adapter_payload(app, monkeypatch):
 
     async with lifespan(app):
         monkeypatch.setattr(app_module._routing_engine, "get_candidates", lambda model, max_tokens=None: [route])
-        monkeypatch.setattr(app_module, "_adapter_registry", type("Registry", (), {"get": lambda self, _: CapturingAdapter()})())
+        monkeypatch.setattr(
+            app_module, "_adapter_registry", type("Registry", (), {"get": lambda self, _: CapturingAdapter()})()
+        )
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(

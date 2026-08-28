@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 
 import uvicorn
 
@@ -18,10 +19,16 @@ def run_server() -> None:
     )
 
 
-def run_init() -> None:
-    from sparrow.init import main as init_main
+def run_catalog_check() -> None:
+    from sparrow.init import run_init as reconcile_catalog
 
-    init_main()
+    raise SystemExit(asyncio.run(reconcile_catalog(apply=False)))
+
+
+def run_catalog_reconcile() -> None:
+    from sparrow.init import main as reconcile_main
+
+    reconcile_main()
 
 
 def _load_runtime() -> tuple[Settings, ProvidersRuntime]:
@@ -121,20 +128,23 @@ def main() -> None:
         description=(
             "SparroW - OpenAI-compatible router for keyless free LLM providers. "
             "Startup requires a valid JSON provider configuration before readiness; "
-            "run 'sparrow init' explicitly to refresh providers.json and models.json."
+            "the server and entrypoint never fetch /models. Use 'sparrow catalog check' "
+            "to inspect changes or 'sparrow catalog reconcile' to update the versioned catalogs."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    init_parser = subparsers.add_parser(
-        "init",
-        help="Explicitly refresh provider models in the configured JSON files before readiness",
+    catalog_parser = subparsers.add_parser(
+        "catalog",
+        help="Check or reconcile the versioned provider model catalogs explicitly",
         description=(
-            "Fetch provider models and atomically update providers.json and models.json. "
-            "Use this explicit init command before starting the server when provider readiness data must be refreshed."
+            "Use 'check' to inspect live provider model changes without writing files, or "
+            "'reconcile' to explicitly update the versioned catalogs. Neither affects server startup."
         ),
     )
-    init_parser.set_defaults(command="init")
+    catalog_subparsers = catalog_parser.add_subparsers(dest="catalog_action", required=True)
+    catalog_subparsers.add_parser("check", help="Inspect live catalog changes without writing files")
+    catalog_subparsers.add_parser("reconcile", help="Explicitly reconcile live changes into the versioned catalogs")
 
     status_parser = subparsers.add_parser(
         "status",
@@ -166,8 +176,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.command == "init":
-        run_init()
+    if args.command == "catalog":
+        match args.catalog_action:
+            case "check":
+                run_catalog_check()
+            case "reconcile":
+                run_catalog_reconcile()
     elif args.command == "status":
         run_status()
     elif args.command == "config":

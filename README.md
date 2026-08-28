@@ -37,8 +37,8 @@ SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible
 
 - ✅ **Zero upstream keys** — all providers are free and keyless
 - ✅ **OpenAI-compatible** — drop-in replacement for any OpenAI SDK or client
-- ✅ **Automatic failover** — if one provider fails, the next is tried seamlessly
-- ✅ **Streaming support** — full SSE streaming with failover
+- ✅ **Automatic failover**: if one provider fails, the next is tried within the request contract
+- ✅ **Streaming support**: SSE streaming with failover before the first event
 - ✅ **Docker-ready** — app container with an optional external WARP proxy
 - ✅ **Lightweight** — pure Python, no heavy dependencies
 
@@ -52,11 +52,11 @@ SparroW aggregates multiple free LLM providers behind a single OpenAI-compatible
 - ✅ **Embeddings** — `/v1/embeddings` endpoint
 - ✅ **Model Listing** — `/v1/models` returns all available models
 - ✅ **Provider Listing** — `/v1/providers` with health status
-- ✅ **Health Check** — `/healthz` liveness and `/readyz` readiness with route and WARP status
+- ✅ **Health Check**: `/healthz` liveness and `/readyz` local process, configuration, route, and WARP readiness
 
 ### Routing
 
-- ✅ **Automatic Failover** — tries next provider on timeout or HTTP error
+- ✅ **Automatic Failover**: tries the next eligible route on retryable upstream failures
 - ✅ **Model Aliases** — request `gpt-4o`, get routed to the best free equivalent
 - ✅ **Routing Modes** — `fair`, `fast`, `quality`, and `model` selection
 - ✅ **Health Tracking** — circuit breaker prevents repeated calls to failing providers
@@ -144,7 +144,7 @@ cp .env.example .env
 # Set SPARROW_API_KEY to a long random secret.
 ```
 
-Sparrow reads `providers.json` and `models.json` from the repository root. `sparrow init` is an explicit refresh command and is never run automatically by the server or entrypoint.
+Sparrow reads the versioned `providers.json` and `models.json` catalogs from the repository root. Catalog discovery and reconciliation are always explicit. Use `sparrow catalog check` to fetch and inspect live model changes without writing files, then use `sparrow catalog reconcile` to apply them. The server and entrypoint never fetch `/models`.
 
 ### 2. Verify provider configuration
 
@@ -196,7 +196,7 @@ curl -i http://localhost:8080/healthz
 curl -i http://localhost:8080/readyz
 ```
 
-`/healthz` is a public liveness endpoint and remains `200` while the process is running. `/readyz` is a public readiness endpoint: it returns `503` before startup completes, when no route is eligible, or when required WARP is unavailable; it returns `200` only when local components and at least one route are ready.
+`/healthz` is a public local liveness endpoint. It reports that the process responds, not that any upstream model can serve traffic. `/readyz` is a public local readiness endpoint for startup, configuration, eligible routes, and required WARP. It returns `503` until those local conditions are ready, and `200` when they are. Neither endpoint validates upstream inference for every model.
 
 ---
 
@@ -268,8 +268,8 @@ API keys are configured via the required `SPARROW_API_KEY` environment variable 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/healthz` | Liveness check (no auth required) |
-| GET | `/readyz` | Readiness check (no auth required; `503` when unavailable) |
+| GET | `/healthz` | Local process liveness check (no auth required) |
+| GET | `/readyz` | Local startup, configuration, route, and WARP readiness check (no auth required) |
 | GET | `/stats` | Request statistics (auth required) |
 | GET | `/metrics` | Prometheus metrics (auth required) |
 
@@ -306,7 +306,7 @@ Every response includes provider metadata:
 | `WARP_MAX_KEEPALIVE` | `20` | Maximum WARP keepalive connections |
 | `SPARROW_WARP_STARTUP_TIMEOUT` | `90` | Maximum time to wait for required WARP during startup (seconds) |
 | `SPARROW_WARP_STARTUP_RETRY_INTERVAL` | `2` | Retry interval while waiting for required WARP (seconds) |
-| `SPARROW_REQUEST_DEADLINE` | `120` | Total request deadline across provider attempts (seconds) |
+| `SPARROW_REQUEST_DEADLINE` | `120` | One absolute deadline for the entire request, including waits, retries, failover, and streaming (seconds) |
 | `SPARROW_MAX_REQUEST_ATTEMPTS` | `4` | Maximum provider attempts per request |
 | `SPARROW_MAX_ROUTE_ATTEMPTS` | `2` | Maximum attempts for one route |
 Boolean settings accept `true`, `false`, `1`, `0`, `yes`, and `no`.
@@ -323,7 +323,7 @@ The Compose `depends_on` health condition applies only to local Docker Compose. 
 
 ## providers.json + models.json
 
-Providers and models are configured in two JSON files. `providers.json` contains provider metadata and aliases, while `models.json` contains model definitions grouped by provider UUID. Sparrow reads these as the runtime provider/model source.
+Providers and models are configured in two versioned JSON catalogs. `providers.json` contains provider metadata and aliases, while `models.json` contains model definitions grouped by provider UUID. Sparrow reads these files as the runtime provider and model source. Catalog reconciliation is explicit and never runs during startup or through the entrypoint. Use `sparrow catalog check` for a read only comparison with live provider catalogs, and `sparrow catalog reconcile` to validate and write the updated catalogs.
 
 ### Provider entry (providers.json)
 
@@ -434,7 +434,8 @@ Client → AuthMiddleware → chat_completions()
       → On success: return response
       → On retryable failure: bounded retry or next route
       → On non-retryable upstream failure: next route
-  → If all fail: return 503
+  → If the absolute deadline expires: return 504
+  → If all candidates fail before the deadline: return 503
 ```
 
 ---
@@ -452,9 +453,9 @@ The request model `auto` means all eligible models. The request model `fair` is 
 
 ### Retry, quota, and SSE contracts
 
-Each request has at most four dispatched attempts and at most two attempts on one route. HTTP `408`, `429`, `5xx`, transport errors, and timeouts are retryable; `Retry-After` is honored only within the total request deadline. Other upstream `4xx` responses advance to the next route without repeating the same route. Local validation errors are never retried. Timeout exhaustion returns `504`; other provider exhaustion returns `503`.
+Each request has one absolute deadline, at most four dispatched attempts, and at most two attempts on one route. HTTP `408`, `429`, `5xx`, transport errors, and timeouts are retryable; `Retry-After` is honored only within the remaining deadline. Other upstream `4xx` responses advance to the next route without repeating the same route. Local validation errors are never retried. Deadline exhaustion returns `504`; other provider exhaustion returns `503`.
 
-Streaming may retry or fail over before the first event. After the first event, the active route is retained: a failure emits one `upstream_error` event, closes the stream, and never emits a later `DONE` or switches providers.
+Streaming may retry or fail over only before the first SSE event. After the first event, the active route is retained. An upstream failure emits exactly one `upstream_error` SSE event, closes the stream, emits no later `[DONE]`, and never switches providers. The HTTP status remains `200` after streaming starts. A client disconnect or cancellation closes the upstream stream without an SSE error or `[DONE]`, and is neutral: it does not record a provider failure or request outcome.
 
 Daily quota acquisition, request statistics, and breaker state are updated for every dispatched attempt. Circuit breakers allow exactly one half-open probe after recovery.
 
@@ -520,7 +521,7 @@ curl http://localhost:8080/healthz
 curl -i http://localhost:8080/readyz
 ```
 
-`/healthz` is liveness and does not require authentication. `/readyz` is readiness and returns `503` until startup, routes, and required WARP are ready.
+`/healthz` is local process liveness and does not require authentication. `/readyz` is local startup, configuration, route, and required WARP readiness. Neither endpoint proves that every upstream model can serve inference traffic.
 
 ---
 

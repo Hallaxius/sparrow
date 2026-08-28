@@ -9,13 +9,13 @@ MODELS_FILE="$APP_DIR/models.json"
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "providers.json configuration file not found: $CONFIG_FILE" >&2
-    echo "Create it or run 'sparrow init' explicitly before starting the server." >&2
+    echo "Add providers.json to the deployment image before starting the server." >&2
     exit 1
 fi
 
 if [ ! -f "$MODELS_FILE" ]; then
     echo "models.json configuration file not found: $MODELS_FILE" >&2
-    echo "Create it or run 'sparrow init' explicitly before starting the server." >&2
+    echo "Add models.json to the deployment image before starting the server." >&2
     exit 1
 fi
 

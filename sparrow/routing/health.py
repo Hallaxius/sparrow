@@ -45,7 +45,10 @@ class CircuitBreaker:
             self._failures += 1
             self._last_failure = time.time()
             old_state = self._state
-            if self._failures >= self._failure_threshold:
+            if old_state == "half-open":
+                self._state = "open"
+                logger.warning("Circuit breaker re-opened: failures=%d/%d", self._failures, self._failure_threshold)
+            elif self._failures >= self._failure_threshold:
                 self._state = "open"
                 logger.warning(
                     "Circuit breaker opened: failures=%d/%d, recovery_in=%ds",
@@ -53,10 +56,11 @@ class CircuitBreaker:
                     self._failure_threshold,
                     self._recovery_time,
                 )
-            elif old_state == "half-open":
-                logger.warning("Circuit breaker re-opened: failures=%d/%d", self._failures, self._failure_threshold)
 
     def should_allow(self) -> bool:
+        return self.try_acquire()
+
+    def try_acquire(self) -> bool:
         with self._lock:
             if self._state == "closed":
                 return True
@@ -68,6 +72,20 @@ class CircuitBreaker:
                     return True
                 return False
             return False
+
+    def is_eligible(self) -> bool:
+        with self._lock:
+            if self._state == "closed":
+                return True
+            if self._state == "open":
+                return time.time() - self._last_failure > self._recovery_time
+            return False
+
+    def cancel_acquire(self) -> None:
+        with self._lock:
+            if self._state == "half-open":
+                self._state = "open"
+                self._last_failure = time.time()
 
     def to_state(self) -> CircuitBreakerState:
         with self._lock:
@@ -123,7 +141,20 @@ class RouteHealthTracker:
             return self._breakers[key]
 
     def is_healthy(self, key: str) -> bool:
-        return self.get_breaker(key).should_allow()
+        return self.is_eligible(key)
+
+    def is_eligible(self, key: str) -> bool:
+        return self.get_breaker(key).is_eligible()
+
+    def try_acquire(self, key: str) -> bool:
+        acquired = self.get_breaker(key).try_acquire()
+        if acquired:
+            self._maybe_persist()
+        return acquired
+
+    def cancel_acquire(self, key: str) -> None:
+        self.get_breaker(key).cancel_acquire()
+        self._maybe_persist()
 
     def record_success(self, key: str) -> None:
         breaker = self.get_breaker(key)

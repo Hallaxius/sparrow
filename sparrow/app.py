@@ -37,7 +37,7 @@ from sparrow.dashboard import DASHBOARD_HTML
 from sparrow.errors import ConfigError, WARPUnavailableError
 from sparrow.mcp_server import MCPServer
 from sparrow.metrics import metrics_endpoint as _metrics_endpoint
-from sparrow.metrics import record_request
+from sparrow.metrics import record_attempt, record_request
 from sparrow.middleware.auth import AuthMiddleware, get_api_key_auth
 from sparrow.middleware.body_limit import BodySizeLimitMiddleware
 from sparrow.middleware.logging import StructuredLogger, generate_request_id
@@ -48,7 +48,7 @@ from sparrow.routing.capability import CapabilityScorer
 from sparrow.routing.context_window import ContextWindowLearner
 from sparrow.routing.engine import Route as RoutingRoute
 from sparrow.routing.engine import RoutingEngine, RoutingMode
-from sparrow.routing.health import CircuitBreaker, RouteHealthTracker
+from sparrow.routing.health import RouteHealthTracker
 from sparrow.routing.quota import QuotaTracker
 from sparrow.routing.rpm import RpmGovernor
 from sparrow.stats import StatsTracker
@@ -248,9 +248,18 @@ async def _call_with_deadline[T](operation: Callable[[], Awaitable[T]], deadline
         return await operation()
 
 
-async def _next_stream_chunk(stream: AsyncIterator[str]) -> str:
-    async with asyncio.timeout(_STREAM_IDLE_TIMEOUT_SECONDS):
+async def _next_stream_chunk(stream: AsyncIterator[str], deadline: float) -> str:
+    timeout = min(_STREAM_IDLE_TIMEOUT_SECONDS, _remaining(deadline))
+    if timeout <= 0:
+        raise TimeoutError("request deadline exceeded")
+    async with asyncio.timeout(timeout):
         return await stream.__anext__()
+
+
+async def _wait_for_rpm(provider_id: str, deadline: float) -> None:
+    if _rpm_governor is None:
+        return
+    await _call_with_deadline(partial(_rpm_governor.acquire, provider_id), deadline)
 
 
 def _error_status(error: Exception) -> int | None:
@@ -294,6 +303,7 @@ def _log_upstream_error(
     path: str,
     provider: str,
     model: str,
+    phase: str = "first_chunk",
 ) -> None:
     if _structured_logger is None:
         return
@@ -306,7 +316,21 @@ def _log_upstream_error(
         model=model,
         status_code=_error_status(error),
         error_type=type(error).__name__,
+        phase=phase,
     )
+
+
+def _log_client_cancellation(
+    request_id: str,
+    method: str,
+    path: str,
+    provider: str,
+    model: str,
+    phase: str,
+) -> None:
+    if _structured_logger is None:
+        return
+    _structured_logger.log_cancellation(request_id, method, path, provider, model, phase)
 
 
 def _retry_after_seconds(error: Exception) -> float | None:
@@ -365,16 +389,22 @@ async def _embedding_operation(adapter: ProviderAdapter, request: EmbeddingReque
     return await adapter.embedding(request, model)
 
 
-def _route_breaker(route: RoutingRoute) -> CircuitBreaker | None:
-    if _routing_engine is None or _routing_engine._health is None:
-        return None
-    return _routing_engine._health.get_breaker(f"{route.provider_id}:{route.model_id}")
-
-
 def _acquire_attempt(route: RoutingRoute) -> bool:
-    if _quota is None:
+    health = None if _routing_engine is None or _routing_engine._health is None else _routing_engine._health
+    key = f"{route.provider_id}:{route.model_id}"
+    if health is not None and not health.try_acquire(key):
+        return False
+    if _quota is None or _quota.try_acquire(route.provider_id, route.model_id, limit=route.daily_quota):
         return True
-    return _quota.try_acquire(route.provider_id, route.model_id, limit=route.daily_quota)
+    if health is not None:
+        health.cancel_acquire(key)
+    return False
+
+
+def _cancel_attempt(route: RoutingRoute) -> None:
+    health = None if _routing_engine is None or _routing_engine._health is None else _routing_engine._health
+    if health is not None:
+        health.cancel_acquire(f"{route.provider_id}:{route.model_id}")
 
 
 def _record_attempt(
@@ -383,18 +413,22 @@ def _record_attempt(
     error: Exception | None = None,
     tokens: int = 0,
     max_tokens: int | None = None,
+    phase: str = "request",
 ) -> float:
     latency_ms = (time.monotonic() - started) * 1000
     success = error is None
     if _stats:
         _stats.record_request(route.provider_id, success=success, latency_ms=latency_ms, tokens=tokens)
-    record_request(route.provider_id, route.model_id, _attempt_status(error), latency_ms / 1000)
-    breaker = _route_breaker(route)
-    if breaker:
+    outcome = _attempt_status(error)
+    record_request(route.provider_id, route.model_id, outcome, latency_ms / 1000)
+    record_attempt(route.provider_id, route.model_id, phase, outcome)
+    health = _routing_engine._health if _routing_engine is not None else None
+    if health is not None:
+        key = f"{route.provider_id}:{route.model_id}"
         if success:
-            breaker.record_success()
+            health.record_success(key)
         else:
-            breaker.record_failure()
+            health.record_failure(key)
     if error is not None and _routing_engine is not None:
         _routing_engine.record_context_overflow(
             route.provider_id, route.model_id, str(error), max_tokens, route.context_window
@@ -718,15 +752,13 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
         return _warp_unavailable_response(error)
 
     if chat_req.stream:
+        deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
         attempts = 0
         stream_last_error: Exception | None = None
         stream_only_timeouts = True
         stream_deadline_expired = False
 
         for route in candidates:
-            if _rpm_governor is not None:
-                await _rpm_governor.acquire(route.provider_id)
-            deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
             if attempts >= _MAX_REQUEST_ATTEMPTS:
                 break
             if _remaining(deadline) <= 0:
@@ -736,6 +768,12 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
             adapter = _adapter_registry.get(route.provider_id)
             if adapter is None:
                 continue
+            try:
+                await _wait_for_rpm(route.provider_id, deadline)
+            except TimeoutError as error:
+                stream_last_error = error
+                stream_deadline_expired = True
+                break
 
             chat_req.model = route.model_id
             first_chunk: str | None = None
@@ -762,11 +800,23 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                     remaining_gen = gen
                     stream_started = True
                     break
+                except (GeneratorExit, asyncio.CancelledError):
+                    _cancel_attempt(route)
+                    record_attempt(route.provider_id, route.model_id, "first_chunk", "client_cancelled")
+                    _log_client_cancellation(
+                        request_id,
+                        request.method,
+                        request.url.path,
+                        route.provider_id,
+                        route.model_id,
+                        "first_chunk",
+                    )
+                    raise
                 except Exception as error:
                     route_error = error
                     stream_last_error = error
                     stream_only_timeouts = stream_only_timeouts and _is_timeout_error(error)
-                    _record_attempt(route, attempt_started, error, max_tokens=max_tokens)
+                    _record_attempt(route, attempt_started, error, max_tokens=max_tokens, phase="first_chunk")
                     if not (
                         _is_retryable_error(error)
                         and route_attempt + 1 < _MAX_ROUTE_ATTEMPTS
@@ -790,6 +840,7 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                         request.url.path,
                         route.provider_id,
                         route.model_id,
+                        phase="first_chunk",
                     )
                     logger.warning(
                         "Failover: %s/%s stream failed (%s), trying next",
@@ -804,20 +855,32 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                 _gen: AsyncIterator[str],
                 _route: RoutingRoute,
                 _attempt_started: float,
+                _deadline: float,
             ) -> AsyncIterator[str]:
                 outcome_error: Exception | None = RuntimeError("stream closed before completion")
+                record_outcome = True
                 try:
                     yield f"data: {_first}\n\n"
                     while True:
                         try:
-                            chunk = await _next_stream_chunk(_gen)
+                            chunk = await _next_stream_chunk(_gen, _deadline)
                         except StopAsyncIteration:
                             break
                         yield f"data: {chunk}\n\n"
                     yield "data: [DONE]\n\n"
                     outcome_error = None
                 except (GeneratorExit, asyncio.CancelledError):
-                    outcome_error = None
+                    _cancel_attempt(_route)
+                    record_outcome = False
+                    record_attempt(_route.provider_id, _route.model_id, "stream_after_first_chunk", "client_cancelled")
+                    _log_client_cancellation(
+                        request_id,
+                        request.method,
+                        request.url.path,
+                        _route.provider_id,
+                        _route.model_id,
+                        "stream_after_first_chunk",
+                    )
                     raise
                 except Exception as error:
                     outcome_error = error
@@ -828,25 +891,33 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
                         request.url.path,
                         _route.provider_id,
                         _route.model_id,
+                        phase="stream_after_first_chunk",
                     )
                     logger.error("Stream error from %s/%s: %r", _route.provider_id, _route.model_id, error)
                     yield f"data: {json.dumps(_stream_error_payload(error))}\n\n"
                 finally:
                     await _close_stream(_gen)
-                    latency_ms = _record_attempt(_route, _attempt_started, outcome_error, max_tokens=max_tokens)
-                    if _structured_logger:
-                        _structured_logger.log_request(
-                            method=request.method,
-                            path=request.url.path,
-                            status_code=200 if outcome_error is None else 502,
-                            duration_ms=latency_ms,
-                            request_id=request_id,
-                            provider=_route.provider_id,
-                            model=_route.model_id,
+                    if record_outcome:
+                        latency_ms = _record_attempt(
+                            _route,
+                            _attempt_started,
+                            outcome_error,
+                            max_tokens=max_tokens,
+                            phase="stream_after_first_chunk",
                         )
+                        if _structured_logger:
+                            _structured_logger.log_request(
+                                method=request.method,
+                                path=request.url.path,
+                                status_code=200 if outcome_error is None else 502,
+                                duration_ms=latency_ms,
+                                request_id=request_id,
+                                provider=_route.provider_id,
+                                model=_route.model_id,
+                            )
 
             return StreamingResponse(
-                _stream_events(first_chunk, remaining_gen, route, attempt_started),
+                _stream_events(first_chunk, remaining_gen, route, attempt_started, deadline),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -874,8 +945,6 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
     deadline_expired = False
 
     for route in candidates:
-        if _rpm_governor is not None:
-            await _rpm_governor.acquire(route.provider_id)
         if attempts >= _MAX_REQUEST_ATTEMPTS:
             break
         if _remaining(deadline) <= 0:
@@ -885,6 +954,12 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
         adapter = _adapter_registry.get(route.provider_id)
         if adapter is None:
             continue
+        try:
+            await _wait_for_rpm(route.provider_id, deadline)
+        except TimeoutError as error:
+            last_error = error
+            deadline_expired = True
+            break
 
         chat_req.model = route.model_id
         chat_route_error: Exception | None = None
@@ -909,6 +984,9 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
 
             try:
                 route_response = await _call_with_deadline(chat_operation, deadline)
+            except (GeneratorExit, asyncio.CancelledError):
+                _cancel_attempt(route)
+                raise
             except Exception as error:
                 chat_route_error = error
                 last_error = error
@@ -1041,15 +1119,13 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
     is_stream = body.get("stream", False)
 
     if is_stream:
+        deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
         attempts = 0
         stream_last_error: Exception | None = None
         stream_only_timeouts = True
         stream_deadline_expired = False
 
         for route in candidates:
-            if _rpm_governor is not None:
-                await _rpm_governor.acquire(route.provider_id)
-            deadline = time.monotonic() + _REQUEST_DEADLINE_SECONDS
             if attempts >= _MAX_REQUEST_ATTEMPTS:
                 break
             if _remaining(deadline) <= 0:
@@ -1059,6 +1135,12 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
             adapter = _adapter_registry.get(route.provider_id)
             if adapter is None:
                 continue
+            try:
+                await _wait_for_rpm(route.provider_id, deadline)
+            except TimeoutError as error:
+                stream_last_error = error
+                stream_deadline_expired = True
+                break
 
             chat_req.model = route.model_id
             first_chunk: str | None = None
@@ -1085,11 +1167,23 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
                     remaining_gen = gen
                     stream_started = True
                     break
+                except (GeneratorExit, asyncio.CancelledError):
+                    _cancel_attempt(route)
+                    record_attempt(route.provider_id, route.model_id, "first_chunk", "client_cancelled")
+                    _log_client_cancellation(
+                        request_id,
+                        request.method,
+                        request.url.path,
+                        route.provider_id,
+                        route.model_id,
+                        "first_chunk",
+                    )
+                    raise
                 except Exception as error:
                     route_error = error
                     stream_last_error = error
                     stream_only_timeouts = stream_only_timeouts and _is_timeout_error(error)
-                    _record_attempt(route, attempt_started, error, max_tokens=max_tokens)
+                    _record_attempt(route, attempt_started, error, max_tokens=max_tokens, phase="first_chunk")
                     if not (
                         _is_retryable_error(error)
                         and route_attempt + 1 < _MAX_ROUTE_ATTEMPTS
@@ -1113,6 +1207,7 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
                         request.url.path,
                         route.provider_id,
                         route.model_id,
+                        phase="first_chunk",
                     )
                     logger.warning(
                         "Failover (anthropic): %s/%s stream failed (%s), trying next",
@@ -1127,14 +1222,16 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
                 _gen: AsyncIterator[str],
                 _route: RoutingRoute,
                 _attempt_started: float,
+                _deadline: float,
             ) -> AsyncIterator[str]:
                 outcome_error: Exception | None = RuntimeError("stream closed before completion")
+                record_outcome = True
                 try:
                     for sse_event in openai_chunk_to_anthropic_sse(json.loads(_first)):
                         yield sse_event
                     while True:
                         try:
-                            chunk = await _next_stream_chunk(_gen)
+                            chunk = await _next_stream_chunk(_gen, _deadline)
                         except StopAsyncIteration:
                             break
                         try:
@@ -1145,7 +1242,17 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
                             logger.debug("Skipping malformed upstream chunk: %r", chunk_error)
                     outcome_error = None
                 except (GeneratorExit, asyncio.CancelledError):
-                    outcome_error = None
+                    _cancel_attempt(_route)
+                    record_outcome = False
+                    record_attempt(_route.provider_id, _route.model_id, "stream_after_first_chunk", "client_cancelled")
+                    _log_client_cancellation(
+                        request_id,
+                        request.method,
+                        request.url.path,
+                        _route.provider_id,
+                        _route.model_id,
+                        "stream_after_first_chunk",
+                    )
                     raise
                 except Exception as error:
                     outcome_error = error
@@ -1156,15 +1263,23 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
                         request.url.path,
                         _route.provider_id,
                         _route.model_id,
+                        phase="stream_after_first_chunk",
                     )
                     logger.error("Stream error (anthropic) from %s/%s: %r", _route.provider_id, _route.model_id, error)
                     yield _sse_event(create_anthropic_error(_stream_error_status(error), _stream_error_message(error)))
                 finally:
                     await _close_stream(_gen)
-                    _record_attempt(_route, _attempt_started, outcome_error, max_tokens=max_tokens)
+                    if record_outcome:
+                        _record_attempt(
+                            _route,
+                            _attempt_started,
+                            outcome_error,
+                            max_tokens=max_tokens,
+                            phase="stream_after_first_chunk",
+                        )
 
             return StreamingResponse(
-                _anthropic_stream_events(first_chunk, remaining_gen, route, attempt_started),
+                _anthropic_stream_events(first_chunk, remaining_gen, route, attempt_started, deadline),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -1191,8 +1306,6 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
     deadline_expired = False
 
     for route in candidates:
-        if _rpm_governor is not None:
-            await _rpm_governor.acquire(route.provider_id)
         if attempts >= _MAX_REQUEST_ATTEMPTS:
             break
         if _remaining(deadline) <= 0:
@@ -1202,6 +1315,12 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
         adapter = _adapter_registry.get(route.provider_id)
         if adapter is None:
             continue
+        try:
+            await _wait_for_rpm(route.provider_id, deadline)
+        except TimeoutError as error:
+            last_error = error
+            deadline_expired = True
+            break
 
         chat_req.model = route.model_id
         chat_route_error: Exception | None = None
@@ -1226,6 +1345,9 @@ async def anthropic_messages(request: Request) -> JSONResponse | StreamingRespon
 
             try:
                 route_response = await _call_with_deadline(chat_operation, deadline)
+            except (GeneratorExit, asyncio.CancelledError):
+                _cancel_attempt(route)
+                raise
             except Exception as error:
                 chat_route_error = error
                 last_error = error
@@ -1351,8 +1473,6 @@ async def embeddings(request: Request) -> JSONResponse:
     deadline_expired = False
 
     for route in candidates:
-        if _rpm_governor is not None:
-            await _rpm_governor.acquire(route.provider_id)
         if attempts >= _MAX_REQUEST_ATTEMPTS:
             break
         if _remaining(deadline) <= 0:
@@ -1362,6 +1482,12 @@ async def embeddings(request: Request) -> JSONResponse:
         adapter = _adapter_registry.get(route.provider_id)
         if adapter is None:
             continue
+        try:
+            await _wait_for_rpm(route.provider_id, deadline)
+        except TimeoutError as error:
+            last_error = error
+            deadline_expired = True
+            break
 
         emb_req.model = route.model_id
         embedding_route_error: Exception | None = None
@@ -1385,6 +1511,9 @@ async def embeddings(request: Request) -> JSONResponse:
 
             try:
                 response = await _call_with_deadline(embedding_operation, deadline)
+            except (GeneratorExit, asyncio.CancelledError):
+                _cancel_attempt(route)
+                raise
             except Exception as error:
                 embedding_route_error = error
                 last_error = error

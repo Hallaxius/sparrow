@@ -1,7 +1,16 @@
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_circuit_breaker_state():
+    persistence_path = Path(".sparrow/circuit_breakers.json")
+    persistence_path.unlink(missing_ok=True)
+    yield
+    persistence_path.unlink(missing_ok=True)
 
 
 @pytest.fixture(autouse=True)

@@ -235,7 +235,7 @@ class RoutingEngine:
     def _healthy_candidates(self, candidates: list[Route]) -> list[Route]:
         if self._health is None:
             return candidates
-        return [r for r in candidates if self._health.is_healthy(f"{r.provider_id}:{r.model_id}")]
+        return [r for r in candidates if self._health.is_eligible(f"{r.provider_id}:{r.model_id}")]
 
     def _filter_by_context(self, candidates: list[Route], max_tokens: int | None) -> list[Route]:
         if max_tokens is None:

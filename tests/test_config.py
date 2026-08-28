@@ -279,13 +279,13 @@ def test_load_all_providers_preserves_current_json_inventory():
         "f3100559-d247-449a-baa1-5092dc4fcf6c",
     ]
     assert {provider_id: len(provider["models"]) for provider_id, provider in providers.items()} == {
-        "1321946a-0d1a-4c00-882e-c626e19047e5": 7,
-        "17b72315-1e87-4a43-b86d-e455bfe57051": 6,
-        "a16ce1ab-4e9d-446e-85ec-34974be6091a": 18,
-        "c193adf9-0783-40fa-a892-3ad8463a2fb6": 15,
-        "c1d70340-1800-4faf-aecc-63480c0ef315": 3,
-        "e142a874-b2b2-4b25-86b3-07834bee7126": 13,
-        "f3100559-d247-449a-baa1-5092dc4fcf6c": 8,
+        "1321946a-0d1a-4c00-882e-c626e19047e5": 4,
+        "17b72315-1e87-4a43-b86d-e455bfe57051": 4,
+        "a16ce1ab-4e9d-446e-85ec-34974be6091a": 16,
+        "c193adf9-0783-40fa-a892-3ad8463a2fb6": 13,
+        "c1d70340-1800-4faf-aecc-63480c0ef315": 1,
+        "e142a874-b2b2-4b25-86b3-07834bee7126": 11,
+        "f3100559-d247-449a-baa1-5092dc4fcf6c": 6,
     }
     assert providers["c1d70340-1800-4faf-aecc-63480c0ef315"]["base_url"] == "https://free.empero.org/v1"
     assert providers["c1d70340-1800-4faf-aecc-63480c0ef315"]["api_keys"] == ["free"]
@@ -300,6 +300,16 @@ def test_load_all_providers_preserves_current_json_inventory():
         "context": 128000,
         "enabled": True,
     }
+
+
+def test_load_all_providers_exposes_glm_flash_alias_with_exact_target():
+    data = load_all_providers()
+    provider_id = "c1d70340-1800-4faf-aecc-63480c0ef315"
+    model_id = "glm-5.3-flash"
+
+    assert data["aliases"][model_id] == f"{provider_id}/{model_id}"
+    assert "qwen3.8-fp8" not in data["aliases"]
+    assert any(model["id"] == model_id for model in data["providers"][provider_id]["models"])
 
 
 def test_load_config():

@@ -49,6 +49,7 @@ class StructuredLogger:
         model: str = "",
         status_code: int | None = None,
         error_type: str = "",
+        phase: str = "",
     ) -> None:
         entry: dict[str, str | int | float] = {
             "timestamp": datetime.now(UTC).isoformat(),
@@ -68,7 +69,32 @@ class StructuredLogger:
             entry["status"] = status_code
         if error_type:
             entry["error_type"] = error_type
+        if phase:
+            entry["phase"] = phase
         self._logger.error(json.dumps(entry))
+
+    def log_cancellation(
+        self,
+        request_id: str,
+        method: str,
+        path: str,
+        provider: str,
+        model: str,
+        phase: str,
+    ) -> None:
+        entry: dict[str, str] = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "level": "info",
+            "event": "client_cancelled",
+            "outcome": "client_cancelled",
+            "request_id": request_id,
+            "method": method,
+            "path": path,
+            "provider": provider,
+            "model": model,
+            "phase": phase,
+        }
+        self._logger.info(json.dumps(entry))
 
 
 RequestLogger = StructuredLogger

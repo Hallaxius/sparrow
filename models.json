@@ -1,13 +1,6 @@
 {
   "1321946a-0d1a-4c00-882e-c626e19047e5": [
     {
-      "id": "x-preview-f-free",
-      "name": "Ox Alpha",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
       "id": "nemotron-3-ultra-free",
       "name": "Nemotron 3 ultra",
       "context": 128000,
@@ -31,20 +24,6 @@
     {
       "id": "nemotron-3.5-lightning-free",
       "name": "Nemotron 3.5 lightning",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-old",
-      "name": "alpha-old",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-new",
-      "name": "alpha-new",
       "context": 128000,
       "quality": 5,
       "enabled": true
@@ -75,20 +54,6 @@
     {
       "id": "nvidia/nemotron-nano-9b-v2",
       "name": "Nemotron nano 9B v2",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-old",
-      "name": "alpha-old",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-new",
-      "name": "alpha-new",
       "context": 128000,
       "quality": 5,
       "enabled": true
@@ -206,20 +171,6 @@
       "context": 128000,
       "quality": 5,
       "enabled": true
-    },
-    {
-      "id": "alpha-old",
-      "name": "alpha-old",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-new",
-      "name": "alpha-new",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
     }
   ],
   "c193adf9-0783-40fa-a892-3ad8463a2fb6": [
@@ -313,25 +264,11 @@
       "context": 128000,
       "quality": 5,
       "enabled": true
-    },
-    {
-      "id": "alpha-old",
-      "name": "alpha-old",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-new",
-      "name": "alpha-new",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
     }
   ],
   "f3100559-d247-449a-baa1-5092dc4fcf6c": [
     {
-      "id": "DeepSeek-V4-Flash-0731",
+      "id": "deepseek-v4-flash:0731",
       "name": "DeepSeek V4 Flash 0731",
       "context": 128000,
       "quality": 5,
@@ -371,40 +308,12 @@
       "context": 128000,
       "quality": 5,
       "enabled": true
-    },
-    {
-      "id": "alpha-old",
-      "name": "alpha-old",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-new",
-      "name": "alpha-new",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
     }
   ],
   "c1d70340-1800-4faf-aecc-63480c0ef315": [
     {
-      "id": "Qwen/Qwen3.8-27B-FP8",
-      "name": "Qwen3.8 FP8",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-old",
-      "name": "alpha-old",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-new",
-      "name": "alpha-new",
+      "id": "glm-5.3-flash",
+      "name": "glm-5.3-flash",
       "context": 128000,
       "quality": 5,
       "enabled": true
@@ -484,20 +393,6 @@
     {
       "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
       "name": "Nemotron 3 Nano Omni 30B A3B Reasoning",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-old",
-      "name": "alpha-old",
-      "context": 128000,
-      "quality": 5,
-      "enabled": true
-    },
-    {
-      "id": "alpha-new",
-      "name": "alpha-new",
       "context": 128000,
       "quality": 5,
       "enabled": true

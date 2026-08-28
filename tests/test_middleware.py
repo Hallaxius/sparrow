@@ -148,3 +148,43 @@ def test_structured_logger_log_request_json(caplog):
     assert entry["duration_ms"] == 42.3
     assert entry["level"] == "info"
     assert "timestamp" in entry
+
+
+def test_structured_logger_log_error_includes_phase(caplog):
+    logger = StructuredLogger(name="test_structured_logger")
+
+    with caplog.at_level("ERROR", logger="test_structured_logger"):
+        logger.log_error(
+            message="Upstream request failed",
+            request_id="abc123def456",
+            provider="provider-1",
+            model="model-1",
+            error_type="RemoteProtocolError",
+            phase="stream_after_first_chunk",
+        )
+
+    assert len(caplog.records) == 1
+    entry = json.loads(caplog.records[0].getMessage())
+    assert entry["phase"] == "stream_after_first_chunk"
+    assert entry["error_type"] == "RemoteProtocolError"
+
+
+def test_structured_logger_log_cancellation_is_neutral(caplog):
+    logger = StructuredLogger(name="test_structured_logger")
+
+    with caplog.at_level("INFO", logger="test_structured_logger"):
+        logger.log_cancellation(
+            request_id="abc123def456",
+            method="POST",
+            path="/v1/chat/completions",
+            provider="provider-1",
+            model="model-1",
+            phase="stream_after_first_chunk",
+        )
+
+    assert len(caplog.records) == 1
+    entry = json.loads(caplog.records[0].getMessage())
+    assert entry["event"] == "client_cancelled"
+    assert entry["outcome"] == "client_cancelled"
+    assert entry["phase"] == "stream_after_first_chunk"
+    assert "status" not in entry

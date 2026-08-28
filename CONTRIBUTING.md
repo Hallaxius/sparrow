@@ -22,7 +22,7 @@ cd sparrow
 uv sync
 ```
 
-Copy `.env.example` to `.env` and set `SPARROW_API_KEY`. The runtime provider source is the validated `providers.json` and `models.json`; use `sparrow init` explicitly when refreshing it.
+Copy `.env.example` to `.env` and set `SPARROW_API_KEY`. The runtime provider source is the validated `providers.json` and `models.json`; use `sparrow catalog check` and `sparrow catalog reconcile` explicitly when refreshing it.
 
 ---
 
